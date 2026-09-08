@@ -19,15 +19,13 @@ import edge_tts
 
 FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
 
-st.set_page_config(page_title="Studio Cinematic Story Master Pro", page_icon="⚡", layout="centered")
+st.set_page_config(page_title="Studio POV Story Master Pro", page_icon="⚡", layout="centered")
 
 FPS = 30
 CLIP_DURATION = 5.0
 LLM_MODEL = "openai/gpt-oss-120b"
 PEXELS_VIDEO_URL = "https://api.pexels.com/videos/search"
 PIXABAY_VIDEO_URL = "https://pixabay.com/api/videos/"
-
-# Nhạc nền điện ảnh kịch tính bản quyền mở
 DRAMA_BGM_URL = "https://upload.wikimedia.org/wikipedia/commons/4/4c/Scott_Buckley_-_Aurora.mp3"
 
 try:
@@ -39,26 +37,23 @@ except Exception:
     st.stop()
 
 st.title("⚡ Studio Cinematic Story Master Pro")
-st.caption("Khớp thị giác hành động sâu • Phân luồng giọng phim tài liệu • Lọc bỏ top đề xuất tĩnh")
+st.caption("Khóa chặt chủ thể hình ảnh • 100% có mặt nhân vật/động vật • Cắt nối chuẩn nhịp 5s")
 
-# ==============================================================================
-# GIAO DIỆN NGƯỜI DÙNG
-# ==============================================================================
 topic_genre = st.text_area(
     "Nhập chủ đề kịch bản chi tiết:",
-    value="Một con tàu đánh cá gặp cơn bão lớn giữa đại dương đen kịt, sóng thần cuồn cuộn và cuộc chiến sinh tồn của các thủy thủ",
-    height=100
+    value="Những loài động vật con đáng yêu nhất thế giới tự nhiên và những khoảnh khắc vui đùa ngộ nghĩnh",
+    height=90
 )
 
 col_t1, col_t2 = st.columns(2)
 with col_t1:
     genre_type = st.selectbox(
-        "Thể loại video (Để gán đúng giọng đọc & âm hưởng):",
+        "Thể loại video:",
         [
-            "Thảm họa / Kịch tính / Sinh tồn / Lịch sử (Dramatic / Disaster)",
-            "Thế giới Động vật / Thiên nhiên hoang dã (Wildlife / Nature)",
-            "Đời sống / Chill / Tươi sáng (Lifestyle / Story)",
-            "Huyền bí / Khoa học viễn tưởng (Sci-Fi / Mystery)"
+            "Thế giới Động vật / Thú cưng (Animals / Pets)",
+            "Thảm họa / Kịch tính / Bão biển / Sinh tồn (Storm / Disaster)",
+            "Siêu xe / Tốc độ / Đua đêm (Supercars / Speed)",
+            "Khám phá / Lịch sử / Khoa học (Exploration / Science)"
         ]
     )
 with col_t2:
@@ -68,23 +63,23 @@ calc_clips = math.ceil(total_sec_input / CLIP_DURATION)
 
 col_v1, col_v2 = st.columns(2)
 with col_v1:
-    language_mode = st.selectbox(
-        "Ngôn ngữ & Giọng đọc mục tiêu:",
+    voice_choice = st.selectbox(
+        "Ngôn ngữ & Giọng đọc:",
         [
-            "Tiếng Anh: Christopher (Giọng tài liệu trầm khàn chuẩn Tây lông)",
-            "Tiếng Anh: Guy (Nam Mỹ mạnh mẽ, cuốn hút)",
-            "Tiếng Anh: Jenny (Nữ kể chuyện truyền cảm)",
-            "Tiếng Việt: Nam Minh (Nam thời sự / tài liệu trầm)",
-            "Tiếng Việt: Hoài My (Nữ truyền hình rõ chữ)"
+            "Tiếng Anh: Christopher (Giọng tài liệu trầm khàn chuẩn Tây)",
+            "Tiếng Anh: Ana (Giọng hoạt hình / động vật vui vẻ)",
+            "Tiếng Anh: Guy (Nam kể chuyện cuốn hút)",
+            "Tiếng Việt: Nam Minh (Nam trầm tài liệu / thời sự)",
+            "Tiếng Việt: Hoài My (Nữ truyền cảm)"
         ]
     )
 with col_v2:
-    orientation_opt = st.selectbox("Khung hình xuất bản:", ["portrait (Dọc 9:16 Shorts/TikTok/Reels)", "landscape (Ngang 16:9 YouTube Chuẩn)"])
+    orientation_opt = st.selectbox("Khung hình xuất bản:", ["landscape (Ngang 16:9 YouTube)", "portrait (Dọc 9:16 Shorts/TikTok)"])
 
-bgm_volume = st.slider("Âm lượng nhạc nền ngầm (%):", min_value=0, max_value=40, value=15, step=5)
+bgm_volume = st.slider("Âm lượng nhạc nền (%):", min_value=0, max_value=40, value=15, step=5)
 
 # ==============================================================================
-# HÀM XỬ LÝ AN TOÀN & CÀO DỮ LIỆU ĐA TẦNG (DEEP SCRAPING)
+# HÀM XỬ LÝ
 # ==============================================================================
 
 def download_file_safe(url: str, dest: str) -> bool:
@@ -108,108 +103,76 @@ def get_audio_duration(path: str) -> float:
     except Exception:
         return 4.0
 
-async def generate_voice_advanced(text: str, out_audio: str, voice_option: str):
+async def generate_voice(text: str, out_audio: str, voice_option: str):
     if "Christopher" in voice_option:
-        voice_code = "en-US-ChristopherNeural"
-        rate_val = "+0%"
+        v_code = "en-US-ChristopherNeural"
+    elif "Ana" in voice_option:
+        v_code = "en-US-AnaNeural"
     elif "Guy" in voice_option:
-        voice_code = "en-US-GuyNeural"
-        rate_val = "+2%"
-    elif "Jenny" in voice_option:
-        voice_code = "en-US-JennyNeural"
-        rate_val = "+0%"
+        v_code = "en-US-GuyNeural"
     elif "Nam Minh" in voice_option:
-        voice_code = "vi-VN-NamMinhNeural"
-        rate_val = "+3%"
+        v_code = "vi-VN-NamMinhNeural"
     else:
-        voice_code = "vi-VN-HoaiMyNeural"
-        rate_val = "+2%"
+        v_code = "vi-VN-HoaiMyNeural"
 
-    comm = edge_tts.Communicate(text, voice=voice_code, rate=rate_val)
+    comm = edge_tts.Communicate(text, voice=v_code, rate="+3%")
     await comm.save(out_audio)
 
-def fetch_deep_pexels_clip(query: str, p_key: str, used_hashes: set, must_keywords: list) -> str:
+def fetch_pexels_clip(query: str, p_key: str, used_hashes: set) -> str:
     headers = {"Authorization": p_key.strip()}
-    # Cào ngẫu nhiên trang 2, 3 hoặc 4 để né sạch các video tĩnh ở trang 1
-    pages_to_crawl = [random.randint(2, 4), random.randint(1, 2)]
-    
-    for page in pages_to_crawl:
+    for page in [1, 2, 3]:
         try:
-            url = f"{PEXELS_VIDEO_URL}?query={urllib.parse.quote(query)}&per_page=15&page={page}"
+            url = f"{PEXELS_VIDEO_URL}?query={urllib.parse.quote(query)}&per_page=12&page={page}"
             r = requests.get(url, headers=headers, timeout=8)
             if r.ok and r.json().get("videos"):
                 videos = r.json()["videos"]
-                # Sắp xếp ưu tiên video có URL hoặc tags khớp với hành động mạnh (storm, wave, rough, ...)
-                scored_videos = []
+                random.shuffle(videos)
                 for v in videos:
                     v_id = f"pexels_{v.get('id')}"
-                    if v_id in used_hashes:
-                        continue
-                    
-                    # Điểm số liên quan ngữ cảnh
-                    score = 0
-                    v_url_text = v.get("url", "").lower()
-                    for mk in must_keywords:
-                        if mk.lower() in v_url_text:
-                            score += 5
-                    
-                    scored_videos.append((score, v, v_id))
-                
-                scored_videos.sort(key=lambda x: x[0], reverse=True)
-                for _, v_obj, v_id in scored_videos:
-                    files = v_obj.get("video_files", [])
-                    hd = next((f["link"] for f in files if f.get("quality") == "hd" and f.get("file_type") == "video/mp4"), None)
-                    if not hd and files:
-                        hd = files[0].get("link")
-                    if hd:
-                        used_hashes.add(v_id)
-                        return hd
+                    if v_id not in used_hashes:
+                        files = v.get("video_files", [])
+                        hd = next((f["link"] for f in files if f.get("quality") == "hd" and f.get("file_type") == "video/mp4"), None)
+                        if not hd and files:
+                            hd = files[0].get("link")
+                        if hd:
+                            used_hashes.add(v_id)
+                            return hd
         except Exception:
             continue
     return None
 
-def fetch_deep_pixabay_clip(query: str, pb_key: str, used_hashes: set, must_keywords: list) -> str:
+def fetch_pixabay_clip(query: str, pb_key: str, used_hashes: set) -> str:
     if not pb_key or not pb_key.strip():
         return None
     try:
-        page = random.randint(1, 3)
-        url = f"{PIXABAY_VIDEO_URL}?key={pb_key.strip()}&q={urllib.parse.quote(query)}&per_page=20&page={page}"
+        url = f"{PIXABAY_VIDEO_URL}?key={pb_key.strip()}&q={urllib.parse.quote(query)}&per_page=15"
         r = requests.get(url, timeout=8)
         if r.ok and r.json().get("hits"):
             hits = r.json()["hits"]
-            scored_hits = []
+            random.shuffle(hits)
             for v in hits:
                 v_id = f"pixabay_{v.get('id')}"
-                if v_id in used_hashes:
-                    continue
-                
-                score = 0
-                tags_str = v.get("tags", "").lower()
-                for mk in must_keywords:
-                    if mk.lower() in tags_str:
-                        score += 5
-                scored_hits.append((score, v, v_id))
-
-            scored_hits.sort(key=lambda x: x[0], reverse=True)
-            for _, v_obj, v_id in scored_hits:
-                v_files = v_obj.get("videos", {})
-                target = v_files.get("large") or v_files.get("medium") or v_files.get("small")
-                if target and target.get("url"):
-                    used_hashes.add(v_id)
-                    return target["url"]
+                if v_id not in used_hashes:
+                    v_files = v.get("videos", {})
+                    target = v_files.get("large") or v_files.get("medium") or v_files.get("small")
+                    if target and target.get("url"):
+                        used_hashes.add(v_id)
+                        return target["url"]
     except Exception:
         pass
     return None
 
-def get_high_relevance_broll(query: str, p_key: str, pb_key: str, used_hashes: set, must_keywords: list) -> str:
-    # Quét luân phiên cả 2 nguồn, ưu tiên video có điểm tương quan cao nhất
-    clip = fetch_deep_pexels_clip(query, p_key, used_hashes, must_keywords)
+def get_exact_subject_clip(query: str, fallback_query: str, p_key: str, pb_key: str, used_hashes: set) -> str:
+    # 1. Tìm bằng từ khóa chi tiết của con vật/tàu
+    clip = fetch_pexels_clip(query, p_key, used_hashes)
     if not clip and pb_key:
-        clip = fetch_deep_pixabay_clip(query, pb_key, used_hashes, must_keywords)
+        clip = fetch_pixabay_clip(query, pb_key, used_hashes)
+    
+    # 2. Nếu không có, tìm bằng từ khóa dự phòng trực diện
     if not clip:
-        # Fallback với từ khóa hành động gắt
-        fallback_query = " ".join(must_keywords[:2]) if must_keywords else "ocean waves storm"
-        clip = fetch_deep_pexels_clip(fallback_query, p_key, used_hashes, must_keywords)
+        clip = fetch_pexels_clip(fallback_query, p_key, used_hashes)
+    if not clip and pb_key:
+        clip = fetch_pixabay_clip(fallback_query, pb_key, used_hashes)
     return clip
 
 def cut_clip_exact_5s(raw_p: str, out_p: str, is_port: bool):
@@ -235,84 +198,87 @@ def cut_clip_exact_5s(raw_p: str, out_p: str, is_port: bool):
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
 # ==============================================================================
-# PIPELINE SẢN XUẤT MASTER
+# PIPELINE SẢN XUẤT CHÍNH
 # ==============================================================================
-if st.button("🚀 Bắt Đầu Sản Xuất Master Video (Khớp Visual 100%)", use_container_width=True, type="primary"):
+if st.button("🚀 Bắt Đầu Sản Xuất Video Chuẩn Chủ Thể 100%", use_container_width=True, type="primary"):
     if not topic_genre.strip():
         st.warning("Vui lòng nhập chủ đề kịch bản.")
     else:
-        status = st.status(f"Hệ thống đang sản xuất kịch bản {calc_clips} cảnh...", expanded=True)
-        workdir = tempfile.mkdtemp(prefix="master_pro_")
+        status = st.status(f"Đang phân tích kịch bản và khóa chủ thể ({calc_clips} cảnh)...", expanded=True)
+        workdir = tempfile.mkdtemp(prefix="master_exact_")
         used_hashes = set()
         is_port = "portrait" in orientation_opt
-        is_en = "Tiếng Anh" in language_mode
+        is_en = "Tiếng Anh" in voice_choice
 
         try:
             client = Groq(api_key=groq_key.strip())
 
-            # 1. AI viết kịch bản điện ảnh + Bóc tách từ khóa hành động vật lý (Loại bỏ từ trừu tượng)
-            status.update(label=f"🧠 1/4: AI xây dựng cốt truyện điện ảnh và trích xuất từ khóa thị giác mạnh...")
-            prompt = f"""You are a Hollywood documentary director and visual effects supervisor.
+            # 1. Ép AI chỉ sinh danh từ động vật / tàu thuyền cụ thể
+            status.update(label=f"🧠 1/4: AI khóa chặt chủ thể danh từ cụ thể cho từng cảnh...")
+            prompt = f"""You are a professional video director.
 Topic: "{topic_genre}".
 Genre: "{genre_type}".
-Total scenes: Exactly {calc_clips} consecutive scenes (each lasts 5.0 seconds).
+Total scenes: Exactly {calc_clips} scenes (each is 5 seconds).
 Language: {"English" if is_en else "Vietnamese"}.
 
-STRICT RULES FOR QUERIES:
-- DO NOT use abstract or peaceful words like "beauty", "sunrise", "calm", "resting", "wonder".
-- If the topic is a STORM or DISASTER, EVERY SINGLE query must contain aggressive, violent physical terms: `storm waves`, `huge sea waves`, `lightning dark clouds`, `ship heavy rain`, `rough sea water`.
-- For each scene provide:
-  + `speech_text`: Short, gripping narrative (under 12 words) that reads in about 3 seconds.
-  + `query_en`: 2-3 specific English words for physical action.
-  + `must_keywords`: Array of 2-3 raw tags to verify relevance (e.g. ["storm", "waves", "sea"]).
+STRICT INSTRUCTION:
+- If Topic is ANIMALS: `query_en` MUST be a specific animal noun + action: `cute puppy playing`, `baby panda eating`, `kitten close up`, `sea otter swimming`, `fluffy bunny rabbit`. NEVER use landscape words like 'forest', 'meadow', 'sunlight', 'tree'.
+- If Topic is SHIP / STORM: `query_en` MUST be: `cargo ship storm waves`, `massive ocean wave`, `lightning dark sea`, `fishing boat rough ocean`.
+- `fallback_en`: 2 simple words identifying the exact subject (e.g. `cute puppy`, `baby panda`, `ship storm`).
+- `speech_text`: A continuous, engaging sentence under 12 words that reads in ~3 seconds.
 
-Return ONLY a valid JSON array of {calc_clips} objects:
+Return ONLY a valid JSON list of {calc_clips} objects:
 [
-  {{
-    "scene": 1,
-    "speech_text": "...",
-    "query_en": "rough ocean storm waves",
-    "must_keywords": ["storm", "waves", "sea"]
-  }}
+  {{"scene": 1, "speech_text": "...", "query_en": "cute puppy playing", "fallback_en": "cute dog"}},
+  {{"scene": 2, "speech_text": "...", "query_en": "baby panda eating bamboo", "fallback_en": "baby panda"}}
 ]"""
 
             resp = client.chat.completions.create(model=LLM_MODEL, messages=[{"role": "user", "content": prompt}], temperature=0.3)
             match = re.search(r'\[.*\]', resp.choices[0].message.content, re.DOTALL)
             parsed_scenes = json.loads(match.group(0)) if match else []
 
-            # Đảm bảo đủ số cảnh
+            # Danh sách dự phòng nếu LLM thiếu cảnh
+            animal_pool = [
+                ("cute puppy dog", "puppy dog"),
+                ("baby panda climbing", "baby panda"),
+                ("cute kitten playing", "kitten cat"),
+                ("fluffy bunny rabbit", "cute rabbit"),
+                ("sea otter floating", "sea otter"),
+                ("little duckling swimming", "cute duckling")
+            ]
             while len(parsed_scenes) < calc_clips:
-                idx = len(parsed_scenes) + 1
+                idx = len(parsed_scenes)
+                pick = animal_pool[idx % len(animal_pool)]
                 parsed_scenes.append({
-                    "scene": idx,
-                    "speech_text": f"Những khoảnh khắc căng thẳng tiếp theo ở phân cảnh {idx}.",
-                    "query_en": "heavy storm rough ocean",
-                    "must_keywords": ["storm", "waves"]
+                    "scene": idx + 1,
+                    "speech_text": "These adorable moments bring pure joy and wonder to our world." if is_en else "Những khoảnh khắc đáng yêu này mang lại niềm vui bất tận.",
+                    "query_en": pick[0],
+                    "fallback_en": pick[1]
                 })
             parsed_scenes = parsed_scenes[:calc_clips]
 
-            # 2. Tạo giọng đọc truyền cảm chuẩn phong cách tài liệu
-            status.update(label="🎙️ 2/4: Đang tạo giọng đọc tài liệu (Documentary Voice)...")
+            # 2. Tạo Voice thuyết minh
+            status.update(label="🎙️ 2/4: Đang tạo giọng đọc thuyết minh...")
             scenes = []
             for idx, item in enumerate(parsed_scenes):
                 voice_file = os.path.join(workdir, f"voice_{idx:02d}.mp3")
-                asyncio.run(generate_voice_advanced(item["speech_text"], voice_file, language_mode))
+                asyncio.run(generate_voice(item["speech_text"], voice_file, voice_choice))
 
                 scenes.append({
                     "query": item["query_en"],
-                    "must_keywords": item.get("must_keywords", []),
+                    "fallback": item.get("fallback_en", "cute animal"),
                     "audio": voice_file,
                     "dur": CLIP_DURATION
                 })
 
-            # 3. Tải B-roll đào sâu trang 2-4 & Lọc tags
-            status.update(label="🎬 3/4: Đào sâu kho video Pexels/Pixabay, lọc bỏ video tĩnh...")
+            # 3. Tải B-roll đúng chủ thể 100%
+            status.update(label="🎬 3/4: Đang tải B-roll đúng chuẩn chủ thể (không lấy cảnh rác)...")
             clips_txt = os.path.join(workdir, "clips.txt")
             with open(clips_txt, "w", encoding="utf-8") as f_cl:
                 for idx, sc in enumerate(scenes):
-                    v_url = get_high_relevance_broll(sc["query"], pexels_key, pixabay_key, used_hashes, sc["must_keywords"])
+                    v_url = get_exact_subject_clip(sc["query"], sc["fallback"], pexels_key, pixabay_key, used_hashes)
                     if not v_url:
-                        v_url = get_high_relevance_broll("huge ocean waves storm", pexels_key, pixabay_key, used_hashes, ["storm", "waves"])
+                        v_url = get_exact_subject_clip("cute puppy dog", "cat", pexels_key, pixabay_key, used_hashes)
 
                     raw_v = os.path.join(workdir, f"raw_{idx:02d}.mp4")
                     cut_v = os.path.join(workdir, f"c_{idx:02d}.mp4")
@@ -335,8 +301,8 @@ Return ONLY a valid JSON array of {calc_clips} objects:
                     subprocess.run(cmd_sync, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
                     f_cl.write(f"file '{os.path.abspath(synced_v)}'\n")
 
-            # 4. Xuất Master + Hòa âm BGM điện ảnh
-            status.update(label="⚡ 4/4: Ghép chuỗi cảnh & hòa âm Master...", state="running")
+            # 4. Xuất Master + Lồng BGM
+            status.update(label="⚡ 4/4: Ghép video hoàn chỉnh & hòa âm Master...", state="running")
             temp_merged = os.path.join(workdir, "temp_merged.mp4")
             final_mp4 = os.path.join(workdir, "master_story_pro.mp4")
 
@@ -366,7 +332,7 @@ Return ONLY a valid JSON array of {calc_clips} objects:
             else:
                 shutil.copy(temp_merged, final_mp4)
 
-            status.update(label=f"🎉 Hoàn thành video {calc_clips * 5}s chuẩn điện ảnh!", state="complete")
+            status.update(label=f"🎉 Hoàn thành video {calc_clips * 5}s chuẩn xác!", state="complete")
 
             with open(final_mp4, "rb") as out_f:
                 v_bytes = out_f.read()
