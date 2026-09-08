@@ -2,3 +2,5 @@ streamlit
 requests
 groq
 imageio-ffmpeg
+edge-tts
+
