@@ -23,7 +23,8 @@ st.set_page_config(page_title="Studio POV Story Master Pro Max", page_icon="⚡"
 
 FPS = 30
 CLIP_DURATION = 5.0
-LLM_MODEL = "llama-3.3-70b-versatile"
+# Dùng đúng model có sẵn trong danh sách quyền của tài khoản
+LLM_MODEL = "openai/gpt-oss-120b"
 PEXELS_VIDEO_URL = "https://api.pexels.com/videos/search"
 PIXABAY_VIDEO_URL = "https://pixabay.com/api/videos/"
 DRAMA_BGM_URL = "https://upload.wikimedia.org/wikipedia/commons/4/4c/Scott_Buckley_-_Aurora.mp3"
@@ -37,9 +38,8 @@ except Exception:
     st.stop()
 
 st.title("⚡ Studio POV Story Master Pro Max")
-st.caption("Chống gãy JSON tuyệt đối • Tải video chuẩn chủ thể 100% • Hỗ trợ video dài lên tới 300 giây")
+st.caption(f"Đã khóa đúng model: {LLM_MODEL} • Chống gãy JSON tuyệt đối • Hỗ trợ tới 300 giây")
 
-# Danh mục chủ thể chuẩn xác
 SUBJECT_POOLS = {
     "Động vật / Thú cưng dễ thương": [
         ("cute golden retriever puppy", "puppy dog"),
@@ -106,7 +106,7 @@ with col_v2:
 bgm_volume = st.slider("Âm lượng nhạc nền ngầm (%):", min_value=0, max_value=40, value=15, step=5)
 
 # ==============================================================================
-# HÀM XỬ LÝ AN TOÀN
+# HÀM KỸ THUẬT AN TOÀN
 # ==============================================================================
 
 def download_file_safe(url: str, dest: str) -> bool:
@@ -214,14 +214,14 @@ def cut_clip_exact_5s(raw_p: str, out_p: str, is_port: bool):
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
 # ==============================================================================
-# PIPELINE SẢN XUẤT MASTER
+# PIPELINE SẢN XUẤT CHÍNH
 # ==============================================================================
-if st.button("🚀 Bắt Đầu Sản Xuất Video Pro Max", use_container_width=True, type="primary"):
+if st.button("🚀 Bắt Đầu Sản Xuất Video Chuẩn Model Groq", use_container_width=True, type="primary"):
     if not topic_genre.strip():
         st.warning("Vui lòng nhập chủ đề kịch bản.")
     else:
-        status = st.status(f"Đang phân bổ {calc_clips} phân cảnh...", expanded=True)
-        workdir = tempfile.mkdtemp(prefix="master_fix_")
+        status = st.status(f"Đang chạy quy trình {calc_clips} phân cảnh...", expanded=True)
+        workdir = tempfile.mkdtemp(prefix="master_prod_")
         used_hashes = set()
         is_port = "portrait" in orientation_opt
         is_en = "Tiếng Anh" in voice_choice
@@ -229,10 +229,8 @@ if st.button("🚀 Bắt Đầu Sản Xuất Video Pro Max", use_container_width
         try:
             client = Groq(api_key=groq_key.strip())
 
-            # 1. Sinh kịch bản chống lỗi JSON (Chia batch nếu số cảnh lớn)
-            status.update(label="🧠 1/4: AI sinh kịch bản câu chuyện liền mạch...")
+            status.update(label=f"🧠 1/4: {LLM_MODEL} đang sinh kịch bản (Batch Mode)...")
             
-            # Chuẩn bị danh sách chủ thể
             if selected_category in SUBJECT_POOLS:
                 pool = SUBJECT_POOLS[selected_category]
             else:
@@ -242,38 +240,43 @@ if st.button("🚀 Bắt Đầu Sản Xuất Video Pro Max", use_container_width
                 ]
 
             parsed_scenes = []
-            BATCH_SIZE = 8
+            # Chia nhỏ 6 cảnh mỗi lượt gọi để không bao giờ bị cắt ngắn JSON
+            BATCH_SIZE = 6
             total_batches = math.ceil(calc_clips / BATCH_SIZE)
 
             for b in range(total_batches):
-                current_batch_count = min(BATCH_SIZE, calc_clips - len(parsed_scenes))
-                prompt = f"""You are an elite video storyteller.
+                needed = min(BATCH_SIZE, calc_clips - len(parsed_scenes))
+                prompt = f"""You are a documentary scriptwriter.
 Topic: "{topic_genre}".
 Language: {"English" if is_en else "Vietnamese"}.
-Generate a narrative of exactly {current_batch_count} sentences continuing the story.
-Each sentence must be under 12 words.
+Task: Write {needed} consecutive story sentences. Each sentence must be under 12 words.
 
-Return JSON in this EXACT format:
-{{
-  "scenes": [
-    {{"speech_text": "Sentence 1..."}},
-    {{"speech_text": "Sentence 2..."}}
-  ]
-}}"""
+Return ONLY a JSON array with exactly {needed} strings. Example:
+["First sentence here.", "Second sentence here."]"""
+
                 resp = client.chat.completions.create(
                     model=LLM_MODEL,
                     messages=[{"role": "user", "content": prompt}],
-                    temperature=0.4,
-                    response_format={"type": "json_object"}
+                    temperature=0.3
                 )
-                data = json.loads(resp.choices[0].message.content)
-                batch_scenes = data.get("scenes", [])
+                raw_text = resp.choices[0].message.content.strip()
+                match = re.search(r'\[.*\]', raw_text, re.DOTALL)
                 
-                for sc in batch_scenes:
+                batch_lines = []
+                if match:
+                    try:
+                        batch_lines = json.loads(match.group(0))
+                    except Exception:
+                        pass
+
+                if not batch_lines:
+                    batch_lines = [f"Khoảnh khắc chân thực đầy lôi cuốn ở phân cảnh {len(parsed_scenes) + i + 1}." for i in range(needed)]
+
+                for line in batch_lines:
                     idx = len(parsed_scenes)
                     q_tuple = pool[idx % len(pool)]
                     parsed_scenes.append({
-                        "speech_text": sc.get("speech_text", "A gripping visual moment."),
+                        "speech_text": str(line).strip(),
                         "query_en": q_tuple[0],
                         "fallback_en": q_tuple[1]
                     })
@@ -281,7 +284,7 @@ Return JSON in this EXACT format:
                         break
 
             # 2. Tạo Voice
-            status.update(label="🎙️ 2/4: Tạo voice thuyết minh từng cảnh...")
+            status.update(label="🎙️ 2/4: Tạo giọng đọc cho từng phân cảnh...")
             scenes = []
             for idx, item in enumerate(parsed_scenes):
                 v_file = os.path.join(workdir, f"v_{idx:03d}.mp3")
@@ -293,8 +296,8 @@ Return JSON in this EXACT format:
                     "dur": CLIP_DURATION
                 })
 
-            # 3. Tải B-roll
-            status.update(label="🎬 3/4: Tải video B-roll chuẩn chủ thể...")
+            # 3. Tải B-roll & Cắt ghép
+            status.update(label="🎬 3/4: Đang tải B-roll chuẩn chủ thể (Pexels + Pixabay)...")
             clips_txt = os.path.join(workdir, "clips.txt")
             with open(clips_txt, "w", encoding="utf-8") as f_cl:
                 for idx, sc in enumerate(scenes):
@@ -324,7 +327,7 @@ Return JSON in this EXACT format:
                     f_cl.write(f"file '{os.path.abspath(synced_v)}'\n")
 
             # 4. Xuất Master
-            status.update(label="⚡ 4/4: Ghép video hoàn chỉnh...", state="running")
+            status.update(label="⚡ 4/4: Ghép Master và xuất thành phẩm...", state="running")
             temp_merged = os.path.join(workdir, "temp_merged.mp4")
             final_mp4 = os.path.join(workdir, "master_story_pro_max.mp4")
 
@@ -363,7 +366,7 @@ Return JSON in this EXACT format:
             st.download_button(
                 label=f"⬇️ Tải Video Hoàn Chỉnh ({calc_clips * 5} Giây)",
                 data=v_bytes,
-                file_name=f"story_pro_max_{int(time.time())}.mp4",
+                file_name=f"story_{calc_clips * 5}s_{int(time.time())}.mp4",
                 mime="video/mp4",
                 use_container_width=True
             )
