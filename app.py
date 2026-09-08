@@ -25,9 +25,10 @@ FPS = 30
 STT_MODEL = "whisper-large-v3-turbo"
 LLM_MODEL = "openai/gpt-oss-120b"
 PEXELS_VIDEO_URL = "https://api.pexels.com/videos/search"
-NEWS_BGM_URL = "https://cdn.pixabay.com/download/audio/2022/11/06/audio_c9735d4928.mp3"
 
-# Nạp credentials từ Secrets
+# Nhạc nền mở trên Wikimedia Commons (Không bị chặn 403 Forbidden)
+NEWS_BGM_URL = "https://upload.wikimedia.org/wikipedia/commons/4/4c/Scott_Buckley_-_Aurora.mp3"
+
 try:
     groq_key = st.secrets["GROQ_API_KEY"]
     pexels_key = st.secrets["PEXELS_API_KEY"]
@@ -36,9 +37,8 @@ except Exception:
     st.stop()
 
 st.title("🎬 Studio POV Master Pro Engine")
-st.caption("B-roll mượt mà + Voice thuyết minh chuẩn + BGM ngầm (Không phụ đề)")
+st.caption("B-roll mượt mà + Voice thuyết minh chuẩn + BGM ngầm (Fix lỗi 403 CDN)")
 
-# Chế độ làm video
 app_mode = st.radio(
     "Chọn phương thức sản xuất video:",
     [
@@ -96,19 +96,26 @@ col_opt1, col_opt2 = st.columns(2)
 with col_opt1:
     orientation_opt = st.selectbox("Khung hình video:", ["portrait (Dọc 9:16 Shorts/TikTok)", "landscape (Ngang 16:9 YouTube)"])
 with col_opt2:
-    bgm_volume = st.slider("Âm lượng nhạc nền (%):", min_value=5, max_value=30, value=12, step=1)
+    bgm_volume = st.slider("Âm lượng nhạc nền (%):", min_value=0, max_value=30, value=12, step=1)
 
 # ==============================================================================
-# HÀM XỬ LÝ KỸ THUẬT
+# HÀM XỬ LÝ AN TOÀN
 # ==============================================================================
 
-def download_file(url: str, dest: str):
-    headers = {"User-Agent": "Mozilla/5.0"}
-    with requests.get(url, headers=headers, stream=True, timeout=25) as r:
-        r.raise_for_status()
-        with open(dest, "wb") as f:
-            for chunk in r.iter_content(chunk_size=16384):
-                f.write(chunk)
+def download_file_safe(url: str, dest: str) -> bool:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
+    try:
+        with requests.get(url, headers=headers, stream=True, timeout=20) as r:
+            if r.status_code == 200:
+                with open(dest, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=16384):
+                        f.write(chunk)
+                return True
+    except Exception:
+        pass
+    return False
 
 def get_audio_duration(path: str) -> float:
     cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", path]
@@ -186,9 +193,9 @@ if st.button("🚀 Bắt Đầu Sản Xuất Video Hoàn Chỉnh", use_container
             scenes = []
             audio_track_mode = "split"
 
-            # 1. Xử lý Voice & Kịch bản
+            # 1. Xử lý Voice
             if uploaded_audio:
-                status.update(label="🎙️ 1/4: Whisper phân tích mốc thời gian từ file voice tải lên...")
+                status.update(label="🎙️ 1/4: Whisper phân tích mốc thời gian...")
                 audio_track_mode = "single"
                 single_audio_path = os.path.join(workdir, "uploaded_voice.mp3")
                 with open(single_audio_path, "wb") as f:
@@ -227,7 +234,7 @@ if st.button("🚀 Bắt Đầu Sản Xuất Video Hoàn Chỉnh", use_container
                 if not scenes:
                     scenes.append({"sentence": "Tổng quan nội dung", "dur": total_aud_dur, "audio": None})
 
-                status.update(label="🧠 2/4: AI gắn từ khóa hình ảnh Pexels cho từng phân đoạn...")
+                status.update(label="🧠 2/4: AI gắn từ khóa Pexels theo mốc thoại...")
                 prompt = f"""Break down these segments into {len(scenes)} visual scene keywords for stock video search.
 Keep queries to 2-3 English words describing physical objects or settings.
 Segments: {[s['sentence'][:60] for s in scenes]}
@@ -265,18 +272,18 @@ Trả về DUY NHẤT JSON array:
                         "dur": max(2.5, dur + 0.3)
                     })
 
-            # 2. Tải Video & Chuẩn hóa kích thước
+            # 2. Tải Video & Ghép nối
             status.update(label="🎬 3/4: Tải B-roll HD & cắt chuẩn thời lượng...")
             clips_txt = os.path.join(workdir, "clips.txt")
             with open(clips_txt, "w", encoding="utf-8") as f_cl:
                 for idx, sc in enumerate(scenes):
                     v_url = get_pexels_video(sc["query"], pexels_key, orient_tag, used_ids)
                     if not v_url:
-                        v_url = get_pexels_video("cinematic corporate technology", pexels_key, orient_tag, used_ids)
+                        v_url = get_pexels_video("corporate technology health", pexels_key, orient_tag, used_ids)
 
                     raw_v = os.path.join(workdir, f"r_{idx:02d}.mp4")
                     cut_v = os.path.join(workdir, f"c_{idx:02d}.mp4")
-                    download_file(v_url, raw_v)
+                    download_file_safe(v_url, raw_v)
 
                     cut_clip_clean(raw_v, cut_v, sc["dur"], is_port)
                     if os.path.exists(raw_v):
@@ -294,8 +301,8 @@ Trả về DUY NHẤT JSON array:
                     else:
                         f_cl.write(f"file '{os.path.abspath(cut_v)}'\n")
 
-            # 3. Ghép Master & Mix Nhạc Nền
-            status.update(label="⚡ 4/4: Đang ghép chuỗi cảnh & hòa âm BGM chuyên nghiệp...", state="running")
+            # 3. Xuất Master + Lồng BGM (có xử lý an toàn)
+            status.update(label="⚡ 4/4: Đang ghép chuỗi cảnh & hòa âm BGM...", state="running")
             temp_merged = os.path.join(workdir, "temp_merged.mp4")
             final_mp4 = os.path.join(workdir, "pro_explainer_master.mp4")
 
@@ -304,39 +311,56 @@ Trả về DUY NHẤT JSON array:
                 "-i", clips_txt, "-c", "copy", temp_merged
             ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
-            bgm_path = os.path.join(workdir, "news_bgm.mp3")
-            download_file(NEWS_BGM_URL, bgm_path)
+            bgm_path = os.path.join(workdir, "bgm.mp3")
+            has_bgm = (bgm_volume > 0) and download_file_safe(NEWS_BGM_URL, bgm_path)
             vol_float = bgm_volume / 100.0
 
-            if audio_track_mode == "single":
-                cmd_mix = [
-                    FFMPEG_EXE, "-y",
-                    "-i", temp_merged,
-                    "-i", single_audio_path,
-                    "-stream_loop", "-1", "-i", bgm_path,
-                    "-filter_complex", f"[1:a]volume=1.0[a0];[2:a]volume={vol_float:.2f}[a1];[a0][a1]amix=inputs=2:duration=first[aout]",
-                    "-map", "0:v:0",
-                    "-map", "[aout]",
-                    "-c:v", "copy",
-                    "-c:a", "aac", "-b:a", "192k",
-                    "-shortest",
-                    final_mp4
-                ]
+            if has_bgm:
+                if audio_track_mode == "single":
+                    cmd_mix = [
+                        FFMPEG_EXE, "-y",
+                        "-i", temp_merged,
+                        "-i", single_audio_path,
+                        "-stream_loop", "-1", "-i", bgm_path,
+                        "-filter_complex", f"[1:a]volume=1.0[a0];[2:a]volume={vol_float:.2f}[a1];[a0][a1]amix=inputs=2:duration=first[aout]",
+                        "-map", "0:v:0",
+                        "-map", "[aout]",
+                        "-c:v", "copy",
+                        "-c:a", "aac", "-b:a", "192k",
+                        "-shortest",
+                        final_mp4
+                    ]
+                else:
+                    cmd_mix = [
+                        FFMPEG_EXE, "-y",
+                        "-i", temp_merged,
+                        "-stream_loop", "-1", "-i", bgm_path,
+                        "-filter_complex", f"[0:a]volume=1.0[a0];[1:a]volume={vol_float:.2f}[a1];[a0][a1]amix=inputs=2:duration=first[aout]",
+                        "-map", "0:v:0",
+                        "-map", "[aout]",
+                        "-c:v", "copy",
+                        "-c:a", "aac", "-b:a", "192k",
+                        "-shortest",
+                        final_mp4
+                    ]
+                subprocess.run(cmd_mix, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
             else:
-                cmd_mix = [
-                    FFMPEG_EXE, "-y",
-                    "-i", temp_merged,
-                    "-stream_loop", "-1", "-i", bgm_path,
-                    "-filter_complex", f"[0:a]volume=1.0[a0];[1:a]volume={vol_float:.2f}[a1];[a0][a1]amix=inputs=2:duration=first[aout]",
-                    "-map", "0:v:0",
-                    "-map", "[aout]",
-                    "-c:v", "copy",
-                    "-c:a", "aac", "-b:a", "192k",
-                    "-shortest",
-                    final_mp4
-                ]
+                if audio_track_mode == "single":
+                    cmd_merge_single = [
+                        FFMPEG_EXE, "-y",
+                        "-i", temp_merged,
+                        "-i", single_audio_path,
+                        "-map", "0:v:0",
+                        "-map", "1:a:0",
+                        "-c:v", "copy",
+                        "-c:a", "aac", "-b:a", "192k",
+                        "-shortest",
+                        final_mp4
+                    ]
+                    subprocess.run(cmd_merge_single, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+                else:
+                    shutil.copy(temp_merged, final_mp4)
 
-            subprocess.run(cmd_mix, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
             status.update(label="✅ Video hoàn thành hoàn hảo!", state="complete")
 
             with open(final_mp4, "rb") as out_f:
