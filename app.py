@@ -4,52 +4,70 @@ import json
 import math
 import subprocess
 import requests
+import re
 from groq import Groq
 
 st.set_page_config(page_title="AI Video Auto Maker", layout="centered")
 
 st.title("🎬 Tool Tự Động Tạo Video")
-st.caption("Tự động đọc API Key cố định - Phân tích Groq + Stock Pexels + FFmpeg")
+st.caption("Groq AI (GPT-OSS-120B) + Stock Pexels + FFmpeg Render")
 
-# 1. Tự động lấy Key từ secrets.toml
+# 1. Tự động lấy Key từ Secrets
 try:
     groq_api_key = st.secrets["GROQ_API_KEY"]
     pexels_api_key = st.secrets["PEXELS_API_KEY"]
 except Exception:
-    st.error("Chưa cấu hình file .streamlit/secrets.toml hoặc thiếu API Key!")
+    st.error("Chưa cấu hình API Key trong mục Secrets của Streamlit Cloud!")
     st.stop()
 
 # Giao diện chính
-topic = st.text_area("Chủ đề hoặc mô tả video:", placeholder="VD: Siêu xe đua trong đêm mưa, phong cách cyberpunk...")
+topic = st.text_area("Chủ đề hoặc mô tả video:", placeholder="VD: Siêu xe đua trong thành phố mưa đêm, cyberpunk...")
 col1, col2 = st.columns(2)
 with col1:
     total_duration = st.number_input("Tổng thời lượng (giây):", min_value=5, max_value=120, value=15, step=5)
 with col2:
     orientation = st.selectbox("Khung hình:", ["portrait (Dọc 9:16 Shorts/TikTok)", "landscape (Ngang 16:9)"])
 
-# Hàm gọi Groq tách từ khóa
+# Hàm gọi Groq với model được cấp phép
 def get_keywords(client, user_topic, num_clips):
     prompt = f"""
     You are an AI video editor. The user wants a video about: "{user_topic}".
     Break down this concept into exactly {num_clips} visual search queries for stock video libraries (Pexels).
     Each query must be 1-3 simple English keywords describing a clear visual scene.
-    Return ONLY a raw JSON array of strings. No markdown, no code fences.
-    Example: ["luxury sport car", "city skyline night", "businessman walking"]
+    Return ONLY a raw JSON array of strings, without any explanation or markdown formatting.
+    Example output format:
+    ["supercar speed", "city night rain", "neon light street"]
     """
-    res = client.chat.completions.create(
-        messages=[{"role": "user", "content": prompt}],
-        model="llama-3.3-70b-versatile",
-        temperature=0.7,
-    )
-    raw = res.choices[0].message.content.strip()
-    if raw.startswith("```"):
-        raw = raw.split("\n", 1)[1].rsplit("\n", 1)[0]
-    return json.loads(raw)
+    
+    # Ưu tiên openai/gpt-oss-120b, dự phòng openai/gpt-oss-20b
+    models_to_try = ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.6-27b"]
+    content = ""
+    for model_name in models_to_try:
+        try:
+            res = client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model=model_name,
+                temperature=0.6,
+            )
+            content = res.choices[0].message.content.strip()
+            if content:
+                break
+        except Exception:
+            continue
+
+    if not content:
+        raise RuntimeError("Không thể kết nối đến model Groq đã chỉ định.")
+
+    # Bóc tách JSON an toàn
+    json_match = re.search(r'\[.*\]', content, re.DOTALL)
+    if json_match:
+        return json.loads(json_match.group(0))
+    return json.loads(content)
 
 # Hàm tìm video Pexels
 def get_pexels_url(api_key, kw, aspect):
     orient = "portrait" if "portrait" in aspect else "landscape"
-    url = f"[https://api.pexels.com/videos/search?query=](https://api.pexels.com/videos/search?query=){kw}&per_page=3&orientation={orient}"
+    url = f"https://api.pexels.com/videos/search?query={kw}&per_page=3&orientation={orient}"
     res = requests.get(url, headers={"Authorization": api_key})
     if res.status_code != 200:
         return None
@@ -79,7 +97,7 @@ if st.button("🚀 Bắt đầu tạo Video", type="primary"):
         
         try:
             num_clips = math.ceil(total_duration / 5)
-            status.info(f"🤖 Đang dùng Groq phân tích {num_clips} phân cảnh...")
+            status.info(f"🤖 Đang dùng Groq (GPT-OSS) phân tích {num_clips} phân cảnh...")
             client = Groq(api_key=groq_api_key)
             keywords = get_keywords(client, topic, num_clips)
             st.write("Từ khóa AI chọn:", keywords)
@@ -89,12 +107,12 @@ if st.button("🚀 Bắt đầu tạo Video", type="primary"):
             for i, kw in enumerate(keywords):
                 v_url = get_pexels_url(pexels_api_key, kw, orientation)
                 if not v_url:
-                    v_url = get_pexels_url(pexels_api_key, "cinematic abstract", orientation)
+                    v_url = get_pexels_url(pexels_api_key, "cinematic background", orientation)
                 v_path = os.path.join(temp_dir, f"raw_{i}.mp4")
                 download_file(v_url, v_path)
                 downloaded.append(v_path)
 
-            status.info("⚙️ FFmpeg đang cắt chuẩn 5s và ráp nối...")
+            status.info("⚙️ FFmpeg đang cắt chuẩn 5s mỗi đoạn và ghép nối...")
             is_portrait = "portrait" in orientation
             res_filter = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920" if is_portrait else "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080"
             
