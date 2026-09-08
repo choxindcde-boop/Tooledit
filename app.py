@@ -16,7 +16,7 @@ import imageio_ffmpeg
 from groq import Groq
 import edge_tts
 
-# Khởi tạo binary FFmpeg độc lập
+# Binary FFmpeg độc lập
 FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
 
 st.set_page_config(page_title="Studio POV Master Pro Engine", page_icon="🎙️", layout="centered")
@@ -26,9 +26,8 @@ STT_MODEL = "whisper-large-v3-turbo"
 LLM_MODEL = "openai/gpt-oss-120b"
 PEXELS_VIDEO_URL = "https://api.pexels.com/videos/search"
 NEWS_BGM_URL = "https://cdn.pixabay.com/download/audio/2022/11/06/audio_c9735d4928.mp3"
-FONT_URL = "https://github.com/googlefonts/roboto/raw/main/src/hinted/Roboto-Bold.ttf"
 
-# Nạp credentials từ secrets
+# Nạp credentials từ Secrets
 try:
     groq_key = st.secrets["GROQ_API_KEY"]
     pexels_key = st.secrets["PEXELS_API_KEY"]
@@ -37,21 +36,20 @@ except Exception:
     st.stop()
 
 st.title("🎬 Studio POV Master Pro Engine")
-st.caption("Khớp 100% ngữ cảnh B-roll, sửa triệt để lỗi cú pháp drawtext & tối ưu âm thanh Explainer")
+st.caption("B-roll mượt mà + Voice thuyết minh chuẩn + BGM ngầm (Không phụ đề)")
 
-# Lựa chọn định dạng sản xuất
+# Chế độ làm video
 app_mode = st.radio(
     "Chọn phương thức sản xuất video:",
     [
-        "🎙️ Tự động tạo Voice Thuyết Minh + Subtitle (Explainer Pro)",
+        "🎙️ Tự động tạo Voice Thuyết Minh (Explainer Pro)",
         "🎧 Dùng Voice Tự Tải Lên (Phân tích Whisper + Khớp B-roll)",
-        "🐾 POV Thú Cưng Bựa / Hài Hước (The Thé + Sound Meme)"
+        "🐾 POV Thú Cưng Bựa / Hài Hước (Voice The Thé)"
     ],
     horizontal=False
 )
 
-# Cấu hình chi tiết theo từng chế độ
-if app_mode == "🎙️ Tự động tạo Voice Thuyết Minh + Subtitle (Explainer Pro)":
+if app_mode == "🎙️ Tự động tạo Voice Thuyết Minh (Explainer Pro)":
     col_v1, col_v2 = st.columns(2)
     with col_v1:
         voice_choice = st.selectbox(
@@ -81,7 +79,7 @@ elif app_mode == "🎧 Dùng Voice Tự Tải Lên (Phân tích Whisper + Khớp
     pitch_scale = 1.0
     rate_tag = "+0%"
 
-else: # Thú cưng bựa
+else: # Thú cưng
     col_p1, col_p2 = st.columns(2)
     with col_p1:
         pet_choice = st.selectbox("Nhân vật chính:", ["Mèo (Cat POV)", "Chó (Dog POV)", "Thú cưng chung"])
@@ -101,7 +99,7 @@ with col_opt2:
     bgm_volume = st.slider("Âm lượng nhạc nền (%):", min_value=5, max_value=30, value=12, step=1)
 
 # ==============================================================================
-# HÀM XỬ LÝ KỸ THUẬT AN TOÀN
+# HÀM XỬ LÝ KỸ THUẬT
 # ==============================================================================
 
 def download_file(url: str, dest: str):
@@ -159,41 +157,12 @@ def get_pexels_video(query: str, p_key: str, orient: str, used_ids: set) -> str:
         pass
     return None
 
-def format_text_lines(text: str, words_per_line: int = 5) -> str:
-    words = text.strip().split()
-    lines = []
-    for i in range(0, len(words), words_per_line):
-        lines.append(" ".join(words[i:i + words_per_line]))
-    return "\n".join(lines)
-
-def cut_clip_with_safe_drawtext(raw_p: str, out_p: str, dur: float, is_port: bool, sub_text: str, font_path: str, workdir: str, clip_idx: int):
-    res_f = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920" if is_port else "scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720"
-    
-    # Nếu có phụ đề, lưu vào textfile trung gian để triệt tiêu lỗi ký tự đặc biệt
-    if sub_text and sub_text.strip():
-        txt_path = os.path.join(workdir, f"sub_{clip_idx:03d}.txt")
-        formatted = format_text_lines(sub_text, words_per_line=5 if is_port else 8)
-        with open(txt_path, "w", encoding="utf-8") as tf:
-            tf.write(formatted)
-        
-        escaped_txt_path = txt_path.replace("\\", "/").replace(":", "\\:")
-        escaped_font_path = font_path.replace("\\", "/").replace(":", "\\:")
-        font_size = 48 if is_port else 34
-        y_pos = "(h-text_h)/2+300" if is_port else "h-text_h-80"
-        
-        vf_filter = (
-            f"{res_f},fps={FPS},"
-            f"drawtext=fontfile='{escaped_font_path}':textfile='{escaped_txt_path}':"
-            f"fontcolor=white:fontsize={font_size}:box=1:boxcolor=black@0.7:boxborderw=12:"
-            f"x=(w-text_w)/2:y={y_pos}"
-        )
-    else:
-        vf_filter = f"{res_f},fps={FPS}"
-
+def cut_clip_clean(raw_p: str, out_p: str, dur: float, is_port: bool):
+    res_f = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30" if is_port else "scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,fps=30"
     cmd = [
         FFMPEG_EXE, "-y", "-ss", "0",
         "-i", raw_p, "-t", f"{dur:.3f}",
-        "-vf", vf_filter,
+        "-vf", res_f,
         "-an", "-c:v", "libx264", "-preset", "ultrafast",
         out_p
     ]
@@ -214,18 +183,10 @@ if st.button("🚀 Bắt Đầu Sản Xuất Video Hoàn Chỉnh", use_container
 
         try:
             client = Groq(api_key=groq_key.strip())
-            
-            # Chuẩn bị Font chữ an toàn
-            status.update(label="🔤 Đang thiết lập bộ font chữ chống lỗi hiển thị...")
-            font_path = os.path.join(workdir, "Roboto-Bold.ttf")
-            download_file(FONT_URL, font_path)
-
             scenes = []
-            audio_track_mode = "split" # split: từng phân đoạn có audio riêng; single: 1 file voice duy nhất
+            audio_track_mode = "split"
 
-            # ----------------------------------------------------
-            # 1. PHÂN TÍCH PHÂN CẢNH VÀ XỬ LÝ ÂM THANH
-            # ----------------------------------------------------
+            # 1. Xử lý Voice & Kịch bản
             if uploaded_audio:
                 status.update(label="🎙️ 1/4: Whisper phân tích mốc thời gian từ file voice tải lên...")
                 audio_track_mode = "single"
@@ -266,8 +227,7 @@ if st.button("🚀 Bắt Đầu Sản Xuất Video Hoàn Chỉnh", use_container
                 if not scenes:
                     scenes.append({"sentence": "Tổng quan nội dung", "dur": total_aud_dur, "audio": None})
 
-                # Gọi LLM sinh query cho từng câu bóc tách
-                status.update(label="🧠 2/4: AI gắn từ khóa hình ảnh Pexels cho từng mốc thoại...")
+                status.update(label="🧠 2/4: AI gắn từ khóa hình ảnh Pexels cho từng phân đoạn...")
                 prompt = f"""Break down these segments into {len(scenes)} visual scene keywords for stock video search.
 Keep queries to 2-3 English words describing physical objects or settings.
 Segments: {[s['sentence'][:60] for s in scenes]}
@@ -279,12 +239,12 @@ Return ONLY JSON array of strings: ["keyword 1", "keyword 2"]"""
                     scenes[idx]["query"] = kws[idx] if idx < len(kws) else "cinematic footage"
 
             else:
-                status.update(label="🧠 1/4: AI tối ưu hóa kịch bản, chia câu & gán bối cảnh B-roll...")
-                prompt = f"""Bạn là đạo diễn video thuyết minh chuyên nghiệp.
+                status.update(label="🧠 1/4: AI phân tích kịch bản & gán bối cảnh B-roll...")
+                prompt = f"""Bạn là đạo diễn video chuyên nghiệp.
 Nội dung:
 \"\"\"{content_script}\"\"\"
 
-Chia kịch bản trên thành 3 đến 6 câu ngắn liền mạch. Gán cho mỗi câu 2-3 từ khóa tiếng Anh miêu tả đúng chủ thể/bối cảnh để tìm B-roll trên Pexels.
+Chia kịch bản trên thành 3 đến 6 câu ngắn liền mạch. Gán cho mỗi câu 2-3 từ khóa tiếng Anh miêu tả đúng bối cảnh thực tế trên Pexels.
 Trả về DUY NHẤT JSON array:
 [
   {{"sentence": "Câu thoại ngắn...", "query_en": "doctor clinic consultation"}}
@@ -293,7 +253,7 @@ Trả về DUY NHẤT JSON array:
                 match = re.search(r'\[.*\]', resp.choices[0].message.content, re.DOTALL)
                 parsed = json.loads(match.group(0)) if match else []
 
-                status.update(label="🎙️ 2/4: Đang tạo giọng đọc thuyết minh & đo đạc thời lượng chuẩn xác...")
+                status.update(label="🎙️ 2/4: Đang tạo giọng đọc thuyết minh & đo thời lượng...")
                 for i, sc in enumerate(parsed):
                     aud_p = os.path.join(workdir, f"v_{i:02d}.mp3")
                     asyncio.run(generate_tts(sc["sentence"], aud_p, selected_voice, rate_tag, pitch_scale))
@@ -305,23 +265,20 @@ Trả về DUY NHẤT JSON array:
                         "dur": max(2.5, dur + 0.3)
                     })
 
-            # ----------------------------------------------------
-            # 2. TẢI VIDEO B-ROLL VÀ RENDER SUBTITLE BẰNG TEXTFILE
-            # ----------------------------------------------------
-            status.update(label="🎬 3/4: Tải B-roll HD & in phụ đề không lỗi ký tự...")
+            # 2. Tải Video & Chuẩn hóa kích thước
+            status.update(label="🎬 3/4: Tải B-roll HD & cắt chuẩn thời lượng...")
             clips_txt = os.path.join(workdir, "clips.txt")
             with open(clips_txt, "w", encoding="utf-8") as f_cl:
                 for idx, sc in enumerate(scenes):
                     v_url = get_pexels_video(sc["query"], pexels_key, orient_tag, used_ids)
                     if not v_url:
-                        v_url = get_pexels_video("medical business technology", pexels_key, orient_tag, used_ids)
+                        v_url = get_pexels_video("cinematic corporate technology", pexels_key, orient_tag, used_ids)
 
                     raw_v = os.path.join(workdir, f"r_{idx:02d}.mp4")
                     cut_v = os.path.join(workdir, f"c_{idx:02d}.mp4")
                     download_file(v_url, raw_v)
 
-                    # Gọi hàm render an toàn tuyệt đối
-                    cut_clip_with_safe_drawtext(raw_v, cut_v, sc["dur"], is_port, sc["sentence"], font_path, workdir, idx)
+                    cut_clip_clean(raw_v, cut_v, sc["dur"], is_port)
                     if os.path.exists(raw_v):
                         os.remove(raw_v)
 
@@ -337,9 +294,7 @@ Trả về DUY NHẤT JSON array:
                     else:
                         f_cl.write(f"file '{os.path.abspath(cut_v)}'\n")
 
-            # ----------------------------------------------------
-            # 3. GHÉP MASTER + LỒNG BGM THEO ÂM LƯỢNG TÙY CHỈNH
-            # ----------------------------------------------------
+            # 3. Ghép Master & Mix Nhạc Nền
             status.update(label="⚡ 4/4: Đang ghép chuỗi cảnh & hòa âm BGM chuyên nghiệp...", state="running")
             temp_merged = os.path.join(workdir, "temp_merged.mp4")
             final_mp4 = os.path.join(workdir, "pro_explainer_master.mp4")
@@ -382,7 +337,7 @@ Trả về DUY NHẤT JSON array:
                 ]
 
             subprocess.run(cmd_mix, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-            status.update(label="✅ Video hoàn thành hoàn hảo, chuẩn phong cách Explainer!", state="complete")
+            status.update(label="✅ Video hoàn thành hoàn hảo!", state="complete")
 
             with open(final_mp4, "rb") as out_f:
                 v_bytes = out_f.read()
