@@ -5,12 +5,16 @@ import math
 import subprocess
 import requests
 import re
+import imageio_ffmpeg
 from groq import Groq
 
 st.set_page_config(page_title="AI Video Auto Maker", layout="centered")
 
 st.title("🎬 Tool Tự Động Tạo Video")
-st.caption("Groq AI (GPT-OSS-120B) + Stock Pexels + FFmpeg Render")
+st.caption("Groq AI + Stock Pexels + FFmpeg Portable")
+
+# Lấy đường dẫn FFmpeg chuẩn tự động
+FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
 
 # 1. Tự động lấy Key từ Secrets
 try:
@@ -28,7 +32,7 @@ with col1:
 with col2:
     orientation = st.selectbox("Khung hình:", ["portrait (Dọc 9:16 Shorts/TikTok)", "landscape (Ngang 16:9)"])
 
-# Hàm gọi Groq với model được cấp phép
+# Hàm gọi Groq với danh sách model khả dụng
 def get_keywords(client, user_topic, num_clips):
     prompt = f"""
     You are an AI video editor. The user wants a video about: "{user_topic}".
@@ -39,7 +43,6 @@ def get_keywords(client, user_topic, num_clips):
     ["supercar speed", "city night rain", "neon light street"]
     """
     
-    # Ưu tiên openai/gpt-oss-120b, dự phòng openai/gpt-oss-20b
     models_to_try = ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.6-27b"]
     content = ""
     for model_name in models_to_try:
@@ -58,7 +61,6 @@ def get_keywords(client, user_topic, num_clips):
     if not content:
         raise RuntimeError("Không thể kết nối đến model Groq đã chỉ định.")
 
-    # Bóc tách JSON an toàn
     json_match = re.search(r'\[.*\]', content, re.DOTALL)
     if json_match:
         return json.loads(json_match.group(0))
@@ -97,7 +99,7 @@ if st.button("🚀 Bắt đầu tạo Video", type="primary"):
         
         try:
             num_clips = math.ceil(total_duration / 5)
-            status.info(f"🤖 Đang dùng Groq (GPT-OSS) phân tích {num_clips} phân cảnh...")
+            status.info(f"🤖 Đang dùng Groq phân tích {num_clips} phân cảnh...")
             client = Groq(api_key=groq_api_key)
             keywords = get_keywords(client, topic, num_clips)
             st.write("Từ khóa AI chọn:", keywords)
@@ -107,7 +109,7 @@ if st.button("🚀 Bắt đầu tạo Video", type="primary"):
             for i, kw in enumerate(keywords):
                 v_url = get_pexels_url(pexels_api_key, kw, orientation)
                 if not v_url:
-                    v_url = get_pexels_url(pexels_api_key, "cinematic background", orientation)
+                    v_url = get_pexels_url(pexels_api_key, "cute animals", orientation)
                 v_path = os.path.join(temp_dir, f"raw_{i}.mp4")
                 download_file(v_url, v_path)
                 downloaded.append(v_path)
@@ -120,7 +122,7 @@ if st.button("🚀 Bắt đầu tạo Video", type="primary"):
             for i, p in enumerate(downloaded):
                 out_p = os.path.join(temp_dir, f"norm_{i}.mp4")
                 cmd = [
-                    "ffmpeg", "-y", "-ss", "0", "-t", "5",
+                    FFMPEG_EXE, "-y", "-ss", "0", "-t", "5",
                     "-i", p,
                     "-vf", f"{res_filter},fps=30",
                     "-c:v", "libx264", "-an", out_p
@@ -135,7 +137,7 @@ if st.button("🚀 Bắt đầu tạo Video", type="primary"):
 
             final_output = "final_output.mp4"
             concat_cmd = [
-                "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                FFMPEG_EXE, "-y", "-f", "concat", "-safe", "0",
                 "-i", concat_txt,
                 "-c", "copy", final_output
             ]
