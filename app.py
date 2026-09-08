@@ -14,7 +14,7 @@ import requests
 import imageio_ffmpeg
 from groq import Groq
 
-# Lấy đường dẫn FFmpeg độc lập chống lỗi No such file or directory
+# Lấy đường dẫn FFmpeg độc lập
 FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
 
 st.set_page_config(page_title="Studio POV Master Engine", page_icon="🎬", layout="centered")
@@ -24,25 +24,16 @@ STT_MODEL = "whisper-large-v3-turbo"
 LLM_MODEL = "openai/gpt-oss-120b"
 PEXELS_VIDEO_URL = "https://api.pexels.com/videos/search"
 
-# Tự động lấy key từ secrets nếu có, hoặc nhận từ ô nhập
-default_groq = st.secrets.get("GROQ_API_KEY", "")
-default_pexels = st.secrets.get("PEXELS_API_KEY", "")
+# Tự động nạp API key từ Secrets
+try:
+    groq_key = st.secrets["GROQ_API_KEY"]
+    pexels_key = st.secrets["PEXELS_API_KEY"]
+except Exception:
+    st.error("Chưa cấu hình GROQ_API_KEY hoặc PEXELS_API_KEY trong mục Secrets của Streamlit Cloud!")
+    st.stop()
 
 st.title("🎬 Studio POV Master Engine")
 st.caption("Khớp 100% ngữ cảnh đời thực của Voice, không ép khuôn mẫu, chống lỗi 254 tuyệt đối")
-
-genre_mode = st.selectbox(
-    "Chọn phong cách & Tone màu chủ đạo của Video:",
-    [
-        "Đời sống thường nhật & Bụi bặm (Street Life / Realistic)",
-        "Tâm lý / Góc khuất & U tối (Dark Moody POV)",
-        "Nghề nghiệp / Tươi sáng & Động lực (Bright Career)",
-        "Tài chính / Khởi nghiệp & Kịch tính (Corporate / Hustle)"
-    ]
-)
-
-groq_key = st.text_input("Groq API Key (Bắt buộc)", value=default_groq, type="password", placeholder="gsk_...")
-pexels_key = st.text_input("Pexels API Key (Để lấy video B-roll HD)", value=default_pexels, type="password", placeholder="Key Pexels...")
 
 col_opt1, col_opt2 = st.columns(2)
 with col_opt1:
@@ -51,7 +42,7 @@ with col_opt2:
     total_sec_input = st.number_input("Tổng thời lượng (giây) nếu không tải voice:", min_value=5, max_value=180, value=15, step=5)
 
 audio_file = st.file_uploader("Tải lên file Voice âm thanh (Tùy chọn, để tự động khớp voice)", type=["mp3", "wav", "m4a", "ogg"])
-topic_text = st.text_area("Chủ đề / Mô tả video (Dùng khi không có file Voice):", placeholder="VD: Siêu xe đua phố đêm mưa, ánh đèn neon phong cách Cyberpunk...")
+topic_text = st.text_area("Chủ đề / Mô tả video (Dùng khi không có file Voice):", placeholder="VD: Siêu xe đua phố đêm mưa, ánh đèn neon cyberpunk...")
 
 # ==============================================================================
 # HÀM XỬ LÝ VIDEO & API
@@ -68,7 +59,6 @@ def get_pexels_video_link(query_en: str, p_key: str, orient: str, used_ids: set)
                 v_id = v.get("id")
                 if v_id and v_id not in used_ids:
                     files = v.get("video_files", [])
-                    # Tìm file chuẩn HD
                     hd_file = next((f.get("link") for f in files if f.get("quality") == "hd" and f.get("file_type") == "video/mp4"), None)
                     if not hd_file and files:
                         hd_file = files[0].get("link")
@@ -103,14 +93,7 @@ def cut_and_normalize_clip(raw_vid_path: str, out_clip_path: str, duration_sec: 
 # PIPELINE SẢN XUẤT CHÍNH
 # ==============================================================================
 if st.button("⚡ Bắt Đầu Dựng Video Thành Phẩm Hoàn Chỉnh", use_container_width=True, type="primary"):
-    active_groq_key = groq_key.strip()
-    active_pexels_key = pexels_key.strip()
-
-    if not active_groq_key:
-        st.error("Vui lòng nhập Groq API Key!")
-    elif not active_pexels_key:
-        st.error("Vui lòng nhập Pexels API Key để tải video stock!")
-    elif not audio_file and not topic_text.strip():
+    if not audio_file and not topic_text.strip():
         st.error("Vui lòng tải lên file Voice âm thanh HOẶC nhập mô tả chủ đề video!")
     else:
         status = st.status("Đang chuẩn bị dây chuyền sản xuất video...", expanded=True)
@@ -120,7 +103,7 @@ if st.button("⚡ Bắt Đầu Dựng Video Thành Phẩm Hoàn Chỉnh", use_co
         orient_tag = "portrait" if is_portrait else "landscape"
 
         try:
-            client = Groq(api_key=active_groq_key)
+            client = Groq(api_key=groq_key.strip())
             segments = []
             audio_path = None
             total_duration = 0.0
@@ -132,7 +115,6 @@ if st.button("⚡ Bắt Đầu Dựng Video Thành Phẩm Hoàn Chỉnh", use_co
                 with open(audio_path, "wb") as f:
                     f.write(audio_file.getbuffer())
 
-                probe_cmd = [FFMPEG_EXE, "-i", audio_path]
                 cmd_dur = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", audio_path]
                 res_dur = subprocess.run(cmd_dur, capture_output=True, text=True)
                 total_duration = float(res_dur.stdout.strip() or 15.0)
@@ -176,12 +158,12 @@ if st.button("⚡ Bắt Đầu Dựng Video Thành Phẩm Hoàn Chỉnh", use_co
                 clip_count = math.ceil(total_duration / 5.0)
                 segments = [{"duration": 5.0, "text": topic_text} for _ in range(clip_count)]
 
-            # 2. AI phân tích từ khóa hành động cho từng cảnh
-            status.update(label=f"🧠 2/4: AI bóc tách từ khóa Pexels theo phong cách: {genre_mode}...")
+            # 2. AI bóc tách từ khóa
+            status.update(label="🧠 2/4: AI bóc tách từ khóa Pexels theo bối cảnh thực tế...")
             num_clips = len(segments)
-            prompt = f"""You are a video editor. Genre style: "{genre_mode}".
-Break down the script/topic into exactly {num_clips} short visual scene descriptions for stock library search.
-Each keyword query must be 1-3 simple English words describing physical real-world visuals (no text/logos).
+            prompt = f"""You are an elite video editor.
+Break down the following script/concept into exactly {num_clips} short visual scene queries for stock video search.
+Each query must be 1-3 simple English words describing physical real-world visuals without text or logos.
 Script/Concept:
 {[s['text'][:80] for s in segments]}
 
@@ -195,9 +177,9 @@ Return ONLY a JSON array of strings:
             )
             content = llm_res.choices[0].message.content.strip()
             match = re.search(r'\[.*\]', content, re.DOTALL)
-            keywords = json.loads(match.group(0)) if match else [genre_mode] * num_clips
+            keywords = json.loads(match.group(0)) if match else ["cinematic background"] * num_clips
 
-            # 3. Tải video sạch và cắt đúng thời lượng (mỗi cảnh 5s)
+            # 3. Tải video sạch và cắt ghép
             status.update(label="🎬 3/4: Tải video B-roll sạch và cắt ghép chính xác...")
             clips_txt = os.path.join(workdir, "clips.txt")
             with open(clips_txt, "w", encoding="utf-8") as f_clips:
@@ -205,9 +187,9 @@ Return ONLY a JSON array of strings:
                     kw = keywords[idx] if idx < len(keywords) else "cinematic background"
                     target_dur = seg.get("duration", 5.0)
 
-                    video_url = get_pexels_video_link(kw, active_pexels_key, orient_tag, used_vid_ids)
+                    video_url = get_pexels_video_link(kw, pexels_key, orient_tag, used_vid_ids)
                     if not video_url:
-                        video_url = get_pexels_video_link("cinematic realistic", active_pexels_key, orient_tag, used_vid_ids)
+                        video_url = get_pexels_video_link("cinematic realistic", pexels_key, orient_tag, used_vid_ids)
 
                     raw_file = os.path.join(workdir, f"raw_{idx:03d}.mp4")
                     cut_file = os.path.join(workdir, f"clip_{idx:03d}.mp4")
