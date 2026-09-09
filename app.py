@@ -16,10 +16,11 @@ import requests
 import imageio_ffmpeg
 from groq import Groq
 import edge_tts
+import yt_dlp
 
 FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
 
-st.set_page_config(page_title="Studio POV Story Master Pro", page_icon="⚡", layout="centered")
+st.set_page_config(page_title="Studio POV Story Master Pro Max", page_icon="⚡", layout="centered")
 
 FPS = 30
 CLIP_DURATION = 5.0
@@ -27,7 +28,7 @@ LLM_MODEL = "openai/gpt-oss-120b"
 PEXELS_VIDEO_URL = "https://api.pexels.com/videos/search"
 PIXABAY_VIDEO_URL = "https://pixabay.com/api/videos/"
 
-# Nhạc nền an toàn MP3 chuẩn
+# File BGM MP3 chuẩn từ kho mở Wikimedia
 BGM_URL = "https://upload.wikimedia.org/wikipedia/commons/4/4c/Scott_Buckley_-_Aurora.mp3"
 
 try:
@@ -38,8 +39,8 @@ except Exception:
     st.error("Chưa cấu hình GROQ_API_KEY hoặc PEXELS_API_KEY trong Secrets của Streamlit Cloud!")
     st.stop()
 
-st.title("⚡ Studio POV Story Master (Bản Sửa Triệt Để Lỗi 254)")
-st.caption("Khóa chuẩn Audio WAV PCM 44.1kHz • Không dùng OGG • Chạy mượt trên FFmpeg v7")
+st.title("⚡ Studio POV Story Master (Mở Rộng Nguồn YouTube + Fix BGM)")
+st.caption("Ép hòa âm BGM 100% không bị nuốt tiếng • Mở rộng nguồn tìm kiếm qua Pexels, Pixabay & YouTube")
 
 SUBJECT_POOLS = {
     "Thảm họa Tàu thuyền / Bão biển / Sóng thần": [
@@ -102,10 +103,10 @@ col_s1, col_s2 = st.columns(2)
 with col_s1:
     ambient_volume = st.slider("Âm lượng tiếng gốc / Môi trường (%):", min_value=10, max_value=80, value=40, step=5)
 with col_s2:
-    bgm_volume = st.slider("Âm lượng nhạc nền ngầm (%):", min_value=0, max_value=40, value=15, step=5)
+    bgm_volume = st.slider("Âm lượng nhạc nền ngầm BGM (%):", min_value=10, max_value=60, value=30, step=5)
 
 # ==============================================================================
-# HÀM XỬ LÝ AN TOÀN
+# HÀM XỬ LÝ AN TOÀN & TẢI ĐA NGUỒN (PEXELS + PIXABAY + YOUTUBE)
 # ==============================================================================
 
 def download_file_safe(url: str, dest: str) -> bool:
@@ -192,28 +193,57 @@ def fetch_from_pixabay(query: str, pb_key: str, used_hashes: set) -> str:
         pass
     return None
 
-def get_broll_clip(query: str, fallback_query: str, p_key: str, pb_key: str, used_hashes: set) -> str:
-    clip = fetch_from_pexels(query, p_key, used_hashes)
-    if not clip and pb_key:
-        clip = fetch_from_pixabay(query, pb_key, used_hashes)
-    if not clip:
-        clip = fetch_from_pexels(fallback_query, p_key, used_hashes)
-    if not clip and pb_key:
-        clip = fetch_from_pixabay(fallback_query, pb_key, used_hashes)
-    return clip
+def fetch_from_youtube(query: str, used_hashes: set, dest_path: str) -> bool:
+    """Tìm và tải đoạn clip ngắn chất lượng cao từ YouTube Search nếu Pexels/Pixabay thiếu góc máy"""
+    ydl_opts = {
+        'format': 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best',
+        'default_search': 'ytsearch10',
+        'max_downloads': 1,
+        'outtmpl': dest_path,
+        'quiet': True,
+        'no_warnings': True,
+        'socket_timeout': 15
+    }
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            search_results = ydl.extract_info(f"ytsearch10:{query} footage", download=False)
+            if search_results and 'entries' in search_results:
+                for entry in search_results['entries']:
+                    if not entry:
+                        continue
+                    v_id = f"yt_{entry.get('id')}"
+                    dur = entry.get('duration', 0)
+                    # Chỉ lấy clip ngắn dưới 5 phút để tránh quá tải
+                    if v_id not in used_hashes and 10 <= dur <= 300:
+                        ydl.download([entry['webpage_url']])
+                        if os.path.exists(dest_path):
+                            used_hashes.add(v_id)
+                            return True
+    except Exception:
+        pass
+    return False
+
+def get_broll_clip(query: str, fallback_query: str, p_key: str, pb_key: str, used_hashes: set, raw_dest: str) -> bool:
+    # 1. Tìm trên Pexels
+    url = fetch_from_pexels(query, p_key, used_hashes)
+    if not url and pb_key:
+        url = fetch_from_pixabay(query, pb_key, used_hashes)
+    if url:
+        return download_file_safe(url, raw_dest)
+
+    # 2. Tìm fallback trên Pexels/Pixabay
+    url = fetch_from_pexels(fallback_query, p_key, used_hashes)
+    if not url and pb_key:
+        url = fetch_from_pixabay(fallback_query, pb_key, used_hashes)
+    if url:
+        return download_file_safe(url, raw_dest)
+
+    # 3. Mở rộng sang YouTube nếu kho stock không có
+    return fetch_from_youtube(query, used_hashes, raw_dest)
 
 def process_single_scene_robust(raw_v: str, voice_mp3: str, out_p: str, is_port: bool, amb_vol: float, workdir: str, idx: int):
-    """
-    Quy trình hòa âm & ghép clip chuẩn PCM WAV (Triệt tiêu 100% lỗi 254):
-    1. Cắt video sạch 5s (không mang cờ audio).
-    2. Chuẩn hóa voice sang WAV 44.1kHz stereo.
-    3. Chuẩn hóa ambient/tiếng gốc sang WAV 44.1kHz stereo dài đúng 5s.
-    4. Trộn 2 file WAV đồng bộ bằng amix không bao giờ bị lệch samplerate.
-    5. Mux video và audio thành phẩm.
-    """
     res_f = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30" if is_port else "scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,fps=30"
     
-    # 1. Cắt hình ảnh đúng 5 giây
     temp_v = os.path.join(workdir, f"tmp_v_{idx:03d}.mp4")
     cmd_v = [
         FFMPEG_EXE, "-y",
@@ -226,7 +256,6 @@ def process_single_scene_robust(raw_v: str, voice_mp3: str, out_p: str, is_port:
     ]
     subprocess.run(cmd_v, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
-    # 2. Chuyển voice về WAV chuẩn (44.1kHz, 2 kênh stereo)
     norm_voice_wav = os.path.join(workdir, f"norm_voice_{idx:03d}.wav")
     cmd_voice = [
         FFMPEG_EXE, "-y",
@@ -237,12 +266,10 @@ def process_single_scene_robust(raw_v: str, voice_mp3: str, out_p: str, is_port:
     ]
     subprocess.run(cmd_voice, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
-    # 3. Chuẩn hóa track môi trường / tiếng gốc sang WAV đúng 5s
     norm_amb_wav = os.path.join(workdir, f"norm_amb_{idx:03d}.wav")
     has_audio = check_video_has_audio(raw_v)
     
     if has_audio:
-        # Lấy âm gốc từ video
         cmd_amb = [
             FFMPEG_EXE, "-y",
             "-i", raw_v,
@@ -251,18 +278,16 @@ def process_single_scene_robust(raw_v: str, voice_mp3: str, out_p: str, is_port:
             norm_amb_wav
         ]
     else:
-        # Sinh tiếng sóng/gió hồng tự nhiên (pink noise) bằng filter của FFmpeg, không cần tải OGG ngoài
         cmd_amb = [
             FFMPEG_EXE, "-y",
-            "-f", "lavfi", "-i", "anoisesrc=d=5:c=pink:r=44100:a=0.1",
-            "-af", "lowpass=f=1000",
+            "-f", "lavfi", "-i", "anoisesrc=d=5:c=pink:r=44100:a=0.15",
+            "-af", "lowpass=f=1200",
             "-t", f"{CLIP_DURATION:.3f}",
             "-ar", "44100", "-ac", "2",
             norm_amb_wav
         ]
     subprocess.run(cmd_amb, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
-    # 4. Trộn 2 file WAV chuẩn và đóng gói vào MP4 thành phẩm
     cmd_mux = [
         FFMPEG_EXE, "-y",
         "-i", temp_v,
@@ -279,7 +304,6 @@ def process_single_scene_robust(raw_v: str, voice_mp3: str, out_p: str, is_port:
     ]
     subprocess.run(cmd_mux, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
-    # Dọn các file WAV đệm
     for p in [temp_v, norm_voice_wav, norm_amb_wav]:
         if os.path.exists(p):
             os.remove(p)
@@ -292,10 +316,11 @@ if st.button("🚀 Bắt Đầu Sản Xuất Master Hoàn Hảo", use_container_
         st.warning("Vui lòng nhập chủ đề kịch bản.")
     else:
         status = st.status(f"Đang chuẩn bị sản xuất {calc_clips} phân cảnh...", expanded=True)
-        workdir = tempfile.mkdtemp(prefix="master_safe_")
+        workdir = tempfile.mkdtemp(prefix="master_yt_")
         used_hashes = set()
         is_port = "portrait" in orientation_opt
         is_en = "Tiếng Anh" in voice_choice
+        total_duration_video = calc_clips * CLIP_DURATION
 
         try:
             client = Groq(api_key=groq_key.strip())
@@ -366,20 +391,19 @@ Return ONLY a JSON array with exactly {needed} strings. Example:
                     "dur": CLIP_DURATION
                 })
 
-            # 3. Tải B-roll và xử lý âm thanh từng cảnh
-            status.update(label="🎬 3/4: Tải B-roll & chuẩn hóa audio 44.1kHz...")
+            # 3. Tải B-roll & ghép cảnh
+            status.update(label="🎬 3/4: Tải video đa nguồn (Pexels, Pixabay, YouTube)...")
             clips_txt = os.path.join(workdir, "clips.txt")
             amb_vol_float = ambient_volume / 100.0
 
             with open(clips_txt, "w", encoding="utf-8") as f_cl:
                 for idx, sc in enumerate(scenes):
-                    v_url = get_broll_clip(sc["query"], sc["fallback"], pexels_key, pixabay_key, used_hashes)
-                    if not v_url:
-                        v_url = get_broll_clip(pool[0][0], pool[0][1], pexels_key, pixabay_key, used_hashes)
-
                     raw_v = os.path.join(workdir, f"r_{idx:03d}.mp4")
                     scene_v = os.path.join(workdir, f"scene_{idx:03d}.mp4")
-                    download_file_safe(v_url, raw_v)
+                    
+                    ok = get_broll_clip(sc["query"], sc["fallback"], pexels_key, pixabay_key, used_hashes, raw_v)
+                    if not ok:
+                        get_broll_clip(pool[0][0], pool[0][1], pexels_key, pixabay_key, used_hashes, raw_v)
 
                     process_single_scene_robust(raw_v, sc["audio"], scene_v, is_port, amb_vol_float, workdir, idx)
                     
@@ -388,8 +412,8 @@ Return ONLY a JSON array with exactly {needed} strings. Example:
 
                     f_cl.write(f"file '{os.path.abspath(scene_v)}'\n")
 
-            # 4. Xuất Master + Lồng BGM
-            status.update(label="⚡ 4/4: Ghép nối Master thành phẩm...", state="running")
+            # 4. Xuất Master + Ép hòa âm BGM
+            status.update(label="⚡ 4/4: Ép hòa âm BGM và xuất Master...", state="running")
             temp_merged = os.path.join(workdir, "temp_merged.mp4")
             final_mp4 = os.path.join(workdir, "master_story_pro.mp4")
 
@@ -398,28 +422,42 @@ Return ONLY a JSON array with exactly {needed} strings. Example:
                 "-i", clips_txt, "-c", "copy", temp_merged
             ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
-            bgm_path = os.path.join(workdir, "bgm.mp3")
-            has_bgm = (bgm_volume > 0) and download_file_safe(BGM_URL, bgm_path)
-            vol_float = bgm_volume / 100.0
+            # Tải BGM và chuẩn hóa độ dài chính xác bằng tổng thời lượng video
+            bgm_raw = os.path.join(workdir, "bgm_raw.mp3")
+            bgm_fitted = os.path.join(workdir, "bgm_fitted.wav")
+            has_bgm = download_file_safe(BGM_URL, bgm_raw)
 
-            if has_bgm:
+            if has_bgm and bgm_volume > 0:
+                # Cắt BGM đúng độ dài video và chuyển về WAV 44.1kHz stereo để hòa âm ổn định
+                cmd_prep_bgm = [
+                    FFMPEG_EXE, "-y",
+                    "-stream_loop", "-1", "-i", bgm_raw,
+                    "-t", f"{total_duration_video:.3f}",
+                    "-ar", "44100", "-ac", "2",
+                    bgm_fitted
+                ]
+                subprocess.run(cmd_prep_bgm, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+
+                vol_bgm_float = bgm_volume / 100.0
+                # Hòa âm trực tiếp track thoại + track BGM (áp dụng weights để không bị nuốt âm)
                 cmd_mix = [
                     FFMPEG_EXE, "-y",
                     "-i", temp_merged,
-                    "-stream_loop", "-1", "-i", bgm_path,
-                    "-filter_complex", f"[0:a]volume=1.0[a0];[1:a]volume={vol_float:.2f}[a1];[a0][a1]amix=inputs=2:duration=first:dropout_transition=0[aout]",
+                    "-i", bgm_fitted,
+                    "-filter_complex",
+                    f"[0:a]volume=1.0[a0];[1:a]volume={vol_bgm_float:.2f}[a1];[a0][a1]amix=inputs=2:duration=first:dropout_transition=0[aout]",
                     "-map", "0:v:0",
                     "-map", "[aout]",
                     "-c:v", "copy",
                     "-c:a", "aac", "-b:a", "192k",
-                    "-shortest",
+                    "-t", f"{total_duration_video:.3f}",
                     final_mp4
                 ]
                 subprocess.run(cmd_mix, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
             else:
                 shutil.copy(temp_merged, final_mp4)
 
-            status.update(label=f"🎉 Hoàn thành video {calc_clips * 5} giây hoàn hảo!", state="complete")
+            status.update(label=f"🎉 Hoàn thành video {calc_clips * 5} giây với đầy đủ âm nền!", state="complete")
 
             with open(final_mp4, "rb") as out_f:
                 v_bytes = out_f.read()
