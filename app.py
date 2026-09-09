@@ -23,7 +23,7 @@ FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
 st.set_page_config(page_title="Studio POV Master Pro Max", page_icon="🎬", layout="centered")
 
 FPS = 30
-CLIP_DURATION = 5.0  # Chuẩn xác 5.0s mỗi phân cảnh
+CLIP_DURATION = 5.0
 LLM_MODEL = "openai/gpt-oss-120b"
 PEXELS_VIDEO_URL = "https://api.pexels.com/videos/search"
 PIXABAY_VIDEO_URL = "https://pixabay.com/api/videos/"
@@ -38,8 +38,8 @@ except Exception:
     st.error("Chưa cấu hình API Key trong mục Secrets của Streamlit Cloud!")
     st.stop()
 
-st.title("🎬 Studio POV Master Pro Max")
-st.caption("Cắt ghép chuẩn ≤ 5s • Tai nạn & Thảm họa cào YouTube thực tế • Động vật/Xe dùng Pexels/Pixabay")
+st.title("🎬 Studio POV Master Pro Max (Fixed 254)")
+st.caption("Khống chế tài nguyên CPU • Output Seeking chống crash keyframe • Cắt ghép chuẩn ≤ 5.0s")
 
 CATEGORY_SETTINGS = {
     "💥 Tổng hợp tai nạn, thảm họa, khoảnh khắc hiểm nghèo thực tế": {
@@ -49,8 +49,7 @@ CATEGORY_SETTINGS = {
             "ship disaster rough sea huge wave caught on camera",
             "airplane emergency landing incident real footage",
             "extreme maritime storm boat caught on camera",
-            "shocking bridge collapse accident caught on camera",
-            "helicopter rescue extreme weather incident"
+            "shocking bridge collapse accident caught on camera"
         ],
         "default_voice_en": "Tiếng Anh: Guy (Nam thời sự / Thảm họa Seconds Before Disaster)",
         "default_voice_vi": "Tiếng Việt: Nam Minh (Nam thời sự / Bản tin tài liệu)",
@@ -134,7 +133,7 @@ with col_opt2:
 bgm_volume = st.slider("Âm lượng nhạc nền ngầm BGM (%):", min_value=0, max_value=40, value=15, step=5)
 
 # ==============================================================================
-# HÀM XỬ LÝ AN TOÀN
+# HÀM KỸ THUẬT AN TOÀN
 # ==============================================================================
 
 def download_file_safe(url: str, dest: str) -> bool:
@@ -178,15 +177,19 @@ async def generate_voice(text: str, out_audio: str, voice_option: str):
     await comm.save(out_audio)
 
 def fetch_from_youtube_fast(query: str, used_hashes: set, dest_path: str) -> bool:
+    """Tải clip ngắn YouTube và remux trực tiếp để chuẩn hóa container MP4"""
     ydl_opts = {
-        'format': 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best',
+        'format': 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]/best',
         'default_search': 'ytsearch10',
         'max_downloads': 1,
         'outtmpl': dest_path,
         'quiet': True,
         'no_warnings': True,
         'socket_timeout': 15,
-        'download_ranges': lambda info_dict, ydl: [{'start_time': 10, 'end_time': 45}]
+        'postprocessors': [{
+            'key': 'FFmpegVideoConvertor',
+            'preferedformat': 'mp4'
+        }]
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -197,7 +200,7 @@ def fetch_from_youtube_fast(query: str, used_hashes: set, dest_path: str) -> boo
                         continue
                     v_id = f"yt_{entry.get('id')}"
                     dur = entry.get('duration', 0)
-                    if v_id not in used_hashes and 10 <= dur <= 1200:
+                    if v_id not in used_hashes and 10 <= dur <= 180:
                         ydl.download([entry['webpage_url']])
                         if os.path.exists(dest_path):
                             used_hashes.add(v_id)
@@ -274,6 +277,11 @@ def get_hybrid_broll(cat_mode: str, query: str, fallback_q: str, p_key: str, pb_
     return fetch_from_youtube_fast(query, used_hashes, raw_dest)
 
 def process_scene_wav_pipeline(raw_v: str, voice_mp3: str, out_p: str, is_port: bool, raw_vol_float: float, workdir: str, idx: int):
+    """
+    Sửa triệt để lỗi 254:
+    - Đưa `-ss` ra sau `-i` để tránh lỗi tìm keyframe trên video YouTube
+    - Giới hạn `-threads 1` và đổi sang `-preset veryfast` để không làm tràn RAM container
+    """
     res_f = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30" if is_port else "scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,fps=30"
 
     cmd_dur = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", raw_v]
@@ -282,7 +290,6 @@ def process_scene_wav_pipeline(raw_v: str, voice_mp3: str, out_p: str, is_port: 
     except Exception:
         raw_dur = 10.0
 
-    # Lấy điểm cắt ngẫu nhiên trong khoảng cao trào
     start_sec = 0.5
     if raw_dur > (CLIP_DURATION + 2.0):
         start_sec = random.uniform(1.0, min(5.0, raw_dur - CLIP_DURATION - 0.5))
@@ -291,25 +298,25 @@ def process_scene_wav_pipeline(raw_v: str, voice_mp3: str, out_p: str, is_port: 
     norm_raw_wav = os.path.join(workdir, f"tmp_raw_{idx:03d}.wav")
     norm_voice_wav = os.path.join(workdir, f"tmp_voice_{idx:03d}.wav")
 
-    # 1. Cắt hình ảnh đúng 5.0 giây
+    # 1. Cắt video: Đặt `-ss` SAU `-i` và khống chế `-threads 1` để chống tràn tài nguyên
     subprocess.run([
         FFMPEG_EXE, "-y",
-        "-ss", f"{start_sec:.2f}",
         "-i", raw_v,
+        "-ss", f"{start_sec:.2f}",
         "-t", f"{CLIP_DURATION:.3f}",
         "-vf", res_f,
         "-an",
-        "-c:v", "libx264", "-preset", "ultrafast",
+        "-c:v", "libx264", "-preset", "veryfast", "-threads", "1",
         temp_v
     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
-    # 2. Cắt và chuẩn hóa âm thanh gốc hiện trường đúng 5.0 giây (WAV 44.1kHz Stereo)
+    # 2. Cắt âm thanh hiện trường: Đặt `-ss` SAU `-i`
     has_audio = check_video_has_audio(raw_v)
     if has_audio:
         subprocess.run([
             FFMPEG_EXE, "-y",
-            "-ss", f"{start_sec:.2f}",
             "-i", raw_v,
+            "-ss", f"{start_sec:.2f}",
             "-t", f"{CLIP_DURATION:.3f}",
             "-ar", "44100", "-ac", "2",
             norm_raw_wav
@@ -324,7 +331,7 @@ def process_scene_wav_pipeline(raw_v: str, voice_mp3: str, out_p: str, is_port: 
             norm_raw_wav
         ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
-    # 3. Chuẩn hóa giọng đọc sang WAV 44.1kHz Stereo
+    # 3. Chuẩn hóa voice
     subprocess.run([
         FFMPEG_EXE, "-y",
         "-i", voice_mp3,
@@ -333,7 +340,7 @@ def process_scene_wav_pipeline(raw_v: str, voice_mp3: str, out_p: str, is_port: 
         norm_voice_wav
     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
-    # 4. Hòa âm tiếng hiện trường + giọng đọc
+    # 4. Hòa âm và đóng gói
     subprocess.run([
         FFMPEG_EXE, "-y",
         "-i", temp_v,
@@ -368,7 +375,7 @@ if st.button("🚀 Bắt Đầu Sản Xuất Master Pro Max", use_container_widt
     try:
         client = Groq(api_key=groq_key.strip())
 
-        # 1. AI biên soạn câu chuyện
+        # 1. AI biên soạn kịch bản
         status.update(label=f"🧠 1/4: {LLM_MODEL} đang sinh kịch bản câu chuyện...")
         pool = cat_config["search_pool"]
         engine_mode = cat_config["engine"]
