@@ -27,7 +27,7 @@ LLM_MODEL = "openai/gpt-oss-120b"
 PEXELS_VIDEO_URL = "https://api.pexels.com/videos/search"
 PIXABAY_VIDEO_URL = "https://pixabay.com/api/videos/"
 
-# Kho âm thanh môi trường thực tế (SFX Ambient mở)
+# Âm thanh môi trường thực tế & BGM bản quyền mở
 AMBIENT_SFX = {
     "storm": "https://upload.wikimedia.org/wikipedia/commons/2/27/Thunderstorm_sound.ogg",
     "nature": "https://upload.wikimedia.org/wikipedia/commons/e/ea/Bird_songs_in_forest.ogg",
@@ -42,8 +42,8 @@ except Exception:
     st.error("Chưa cấu hình GROQ_API_KEY hoặc PEXELS_API_KEY trong Secrets của Streamlit Cloud!")
     st.stop()
 
-st.title("⚡ Studio POV Story Master (Bật Âm Thanh Môi Trường Gốc)")
-st.caption("Khôi phục âm thanh sóng biển/tiếng động vật • Hòa âm 3 lớp chuẩn điện ảnh")
+st.title("⚡ Studio POV Story Master (Fix Lỗi 254)")
+st.caption("Khôi phục âm thanh gốc / Môi trường • Triệt tiêu lỗi 254 • Cắt ghép chuẩn xác 5s")
 
 SUBJECT_POOLS = {
     "Thảm họa Tàu thuyền / Bão biển / Sóng thần": [
@@ -104,12 +104,12 @@ with col_v2:
 
 col_s1, col_s2 = st.columns(2)
 with col_s1:
-    ambient_volume = st.slider("Âm lượng tiếng gốc / Môi trường (Sóng/Gió/Kêu) (%):", min_value=10, max_value=80, value=45, step=5)
+    ambient_volume = st.slider("Âm lượng tiếng gốc / Môi trường (%):", min_value=10, max_value=80, value=40, step=5)
 with col_s2:
     bgm_volume = st.slider("Âm lượng nhạc nền ngầm (%):", min_value=0, max_value=40, value=15, step=5)
 
 # ==============================================================================
-# HÀM XỬ LÝ AN TOÀN & ÂM THANH MÔI TRƯỜNG
+# HÀM XỬ LÝ AN TOÀN
 # ==============================================================================
 
 def download_file_safe(url: str, dest: str) -> bool:
@@ -206,8 +206,8 @@ def get_broll_clip(query: str, fallback_query: str, p_key: str, pb_key: str, use
         clip = fetch_from_pixabay(fallback_query, pb_key, used_hashes)
     return clip
 
-def cut_clip_with_native_audio(raw_p: str, out_p: str, is_port: bool, ambient_track_path: str):
-    """Cắt chuẩn 5s, giữ nguyên tiếng gốc và tự bù âm môi trường nếu video câm"""
+def cut_clip_exact_5s_safe(raw_p: str, out_p: str, is_port: bool, ambient_track_path: str):
+    """Cắt chuẩn 5s an toàn, loại bỏ triệt để xung đột -stream_loop và -shortest gây lỗi 254"""
     res_f = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30" if is_port else "scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,fps=30"
 
     cmd_dur = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", raw_p]
@@ -223,10 +223,12 @@ def cut_clip_with_native_audio(raw_p: str, out_p: str, is_port: bool, ambient_tr
     has_audio = check_video_has_audio(raw_p)
 
     if has_audio:
-        # Giữ nguyên âm thanh gốc, thêm fade in/out nhẹ 0.2s để không bị cụt
+        # Giữ lại âm gốc của clip
         cmd = [
-            FFMPEG_EXE, "-y", "-ss", f"{start_sec:.2f}",
-            "-i", raw_p, "-t", f"{CLIP_DURATION:.3f}",
+            FFMPEG_EXE, "-y",
+            "-ss", f"{start_sec:.2f}",
+            "-i", raw_p,
+            "-t", f"{CLIP_DURATION:.3f}",
             "-vf", res_f,
             "-af", "afade=t=in:ss=0:d=0.2,afade=t=out:st=4.8:d=0.2",
             "-c:v", "libx264", "-preset", "ultrafast",
@@ -234,11 +236,13 @@ def cut_clip_with_native_audio(raw_p: str, out_p: str, is_port: bool, ambient_tr
             out_p
         ]
     else:
-        # Nếu video stock bị câm, nạp trực tiếp âm môi trường (sóng biển/rừng) bù vào
+        # Bù trực tiếp đoạn audio môi trường (cắt đúng 5.0s, không dùng stream_loop vô tận)
         cmd = [
-            FFMPEG_EXE, "-y", "-ss", f"{start_sec:.2f}",
+            FFMPEG_EXE, "-y",
+            "-ss", f"{start_sec:.2f}",
             "-i", raw_p,
-            "-stream_loop", "-1", "-i", ambient_track_path,
+            "-ss", "0",
+            "-i", ambient_track_path,
             "-t", f"{CLIP_DURATION:.3f}",
             "-vf", res_f,
             "-af", "afade=t=in:ss=0:d=0.2,afade=t=out:st=4.8:d=0.2",
@@ -246,20 +250,20 @@ def cut_clip_with_native_audio(raw_p: str, out_p: str, is_port: bool, ambient_tr
             "-map", "1:a:0",
             "-c:v", "libx264", "-preset", "ultrafast",
             "-c:a", "aac", "-b:a", "192k",
-            "-shortest",
             out_p
         ]
+
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
 # ==============================================================================
 # PIPELINE SẢN XUẤT CHÍNH
 # ==============================================================================
-if st.button("🚀 Bắt Đầu Sản Xuất Master (Hòa Âm Tiếng Gốc)", use_container_width=True, type="primary"):
+if st.button("🚀 Bắt Đầu Sản Xuất Master An Toàn (Đã Sửa Lỗi 254)", use_container_width=True, type="primary"):
     if not topic_genre.strip():
         st.warning("Vui lòng nhập chủ đề kịch bản.")
     else:
         status = st.status(f"Đang chạy quy trình sản xuất {calc_clips} phân cảnh...", expanded=True)
-        workdir = tempfile.mkdtemp(prefix="master_ambient_")
+        workdir = tempfile.mkdtemp(prefix="master_safe_")
         used_hashes = set()
         is_port = "portrait" in orientation_opt
         is_en = "Tiếng Anh" in voice_choice
@@ -267,13 +271,13 @@ if st.button("🚀 Bắt Đầu Sản Xuất Master (Hòa Âm Tiếng Gốc)", u
         try:
             client = Groq(api_key=groq_key.strip())
 
-            # Chuẩn bị âm thanh môi trường bù đắp nếu gặp video stock câm
-            status.update(label="🌊 Đang chuẩn bị âm thanh môi trường (Sóng/Bão/Thiên nhiên)...")
-            ambient_file = os.path.join(workdir, "ambient_fallback.mp3")
-            amb_url = AMBIENT_SFX["storm"] if "bão" in topic_genre.lower() or "tàu" in topic_genre.lower() or "ocean" in topic_genre.lower() else AMBIENT_SFX["nature"]
+            # Chuẩn bị track âm thanh môi trường
+            status.update(label="🌊 Đang thiết lập âm thanh môi trường thực tế...")
+            ambient_file = os.path.join(workdir, "ambient_cut.mp3")
+            amb_url = AMBIENT_SFX["storm"] if any(w in topic_genre.lower() for w in ["bão", "tàu", "sóng", "ocean", "sea", "storm"]) else AMBIENT_SFX["nature"]
             download_file_safe(amb_url, ambient_file)
 
-            # 1. Sinh kịch bản
+            # 1. Sinh kịch bản Batch
             status.update(label=f"🧠 1/4: {LLM_MODEL} đang xây dựng câu chuyện...")
             if selected_category in SUBJECT_POOLS:
                 pool = SUBJECT_POOLS[selected_category]
@@ -313,7 +317,7 @@ Return ONLY a JSON array with exactly {needed} strings. Example:
                         pass
 
                 if not batch_lines:
-                    batch_lines = [f"Khoảnh khắc chân thực đầy lôi cuốn ở phân cảnh {len(parsed_scenes) + i + 1}." for i in range(needed)]
+                    batch_lines = [f"Khoảnh khắc chân thực đầy kịch tính ở phân cảnh {len(parsed_scenes) + i + 1}." for i in range(needed)]
 
                 for line in batch_lines:
                     idx = len(parsed_scenes)
@@ -339,8 +343,8 @@ Return ONLY a JSON array with exactly {needed} strings. Example:
                     "dur": CLIP_DURATION
                 })
 
-            # 3. Tải B-roll và giữ trọn vẹn âm thanh gốc
-            status.update(label="🎬 3/4: Đang trích xuất B-roll & giữ âm thanh thực tế...")
+            # 3. Tải B-roll và xử lý âm thanh an toàn
+            status.update(label="🎬 3/4: Đang tải B-roll & hòa âm môi trường...")
             clips_txt = os.path.join(workdir, "clips.txt")
             amb_vol_float = ambient_volume / 100.0
 
@@ -354,12 +358,11 @@ Return ONLY a JSON array with exactly {needed} strings. Example:
                     cut_v = os.path.join(workdir, f"c_{idx:03d}.mp4")
                     download_file_safe(v_url, raw_v)
 
-                    # Cắt clip và giữ nguyên luồng tiếng gốc / bù ambient
-                    cut_clip_with_native_audio(raw_v, cut_v, is_port, ambient_file)
+                    cut_clip_exact_5s_safe(raw_v, cut_v, is_port, ambient_file)
                     if os.path.exists(raw_v):
                         os.remove(raw_v)
 
-                    # Hòa âm Voice đọc (1.0) cùng tiếng môi trường gốc (amb_vol_float)
+                    # Hòa âm Voice đọc (1.0) và Âm gốc/Môi trường (amb_vol_float)
                     synced_v = os.path.join(workdir, f"s_{idx:03d}.mp4")
                     cmd_sync = [
                         FFMPEG_EXE, "-y",
@@ -376,10 +379,10 @@ Return ONLY a JSON array with exactly {needed} strings. Example:
                     subprocess.run(cmd_sync, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
                     f_cl.write(f"file '{os.path.abspath(synced_v)}'\n")
 
-            # 4. Xuất Master + Hòa âm BGM
-            status.update(label="⚡ 4/4: Ghép Master và hoàn tất hòa âm 3 lớp...", state="running")
+            # 4. Xuất Master + Lồng BGM
+            status.update(label="⚡ 4/4: Ghép Master và xuất thành phẩm...", state="running")
             temp_merged = os.path.join(workdir, "temp_merged.mp4")
-            final_mp4 = os.path.join(workdir, "master_with_ambient.mp4")
+            final_mp4 = os.path.join(workdir, "master_story_pro.mp4")
 
             subprocess.run([
                 FFMPEG_EXE, "-y", "-f", "concat", "-safe", "0",
@@ -407,7 +410,7 @@ Return ONLY a JSON array with exactly {needed} strings. Example:
             else:
                 shutil.copy(temp_merged, final_mp4)
 
-            status.update(label=f"🎉 Hoàn thành video {calc_clips * 5} giây với đầy đủ âm thanh sống động!", state="complete")
+            status.update(label=f"🎉 Hoàn thành video {calc_clips * 5} giây hoàn hảo!", state="complete")
 
             with open(final_mp4, "rb") as out_f:
                 v_bytes = out_f.read()
@@ -416,7 +419,7 @@ Return ONLY a JSON array with exactly {needed} strings. Example:
             st.download_button(
                 label=f"⬇️ Tải Video Hoàn Chỉnh ({calc_clips * 5} Giây)",
                 data=v_bytes,
-                file_name=f"ambient_story_{calc_clips * 5}s_{int(time.time())}.mp4",
+                file_name=f"story_{calc_clips * 5}s_{int(time.time())}.mp4",
                 mime="video/mp4",
                 use_container_width=True
             )
