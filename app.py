@@ -38,12 +38,12 @@ except Exception:
     st.error("Chưa cấu hình API Key trong mục Secrets của Streamlit Cloud!")
     st.stop()
 
-st.title("🎬 Studio POV Master Pro Max (Hardened Pipeline)")
-st.caption("Khắc phục triệt để exit status 254 • Cắt thô trước render • Tải YouTube siêu tốc")
+st.title("🎬 Studio POV Master Pro Max")
+st.caption("Khắc phục triệt để file rác YouTube • Kiểm tra toàn vẹn file • Cắt ghép chuẩn ≤ 5.0s")
 
 CATEGORY_SETTINGS = {
     "💥 Tổng hợp tai nạn, thảm họa, khoảnh khắc hiểm nghèo thực tế": {
-        "engine": "youtube_only",
+        "engine": "youtube_preferred",
         "search_pool": [
             "moments filmed seconds before disaster real footage",
             "ship disaster rough sea huge wave caught on camera",
@@ -133,21 +133,35 @@ with col_opt2:
 bgm_volume = st.slider("Âm lượng nhạc nền ngầm BGM (%):", min_value=0, max_value=40, value=15, step=5)
 
 # ==============================================================================
-# HÀM XỬ LÝ KỸ THUẬT AN TOÀN TUYỆT ĐỐI
+# HÀM XỬ LÝ AN TOÀN & KIỂM TRA FILE
 # ==============================================================================
 
 def download_file_safe(url: str, dest: str) -> bool:
-    headers = {"User-Agent": "Mozilla/5.0"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     try:
         with requests.get(url, headers=headers, stream=True, timeout=20) as r:
             if r.status_code == 200:
                 with open(dest, "wb") as f:
                     for chunk in r.iter_content(chunk_size=16384):
                         f.write(chunk)
-                return True
+                return os.path.exists(dest) and os.path.getsize(dest) > 100000
     except Exception:
         pass
     return False
+
+def verify_valid_video_file(file_path: str) -> bool:
+    """Kiểm tra video có tồn tại, có dung lượng hợp lệ (>200KB) và đọc được bằng ffprobe"""
+    if not file_path or not os.path.exists(file_path):
+        return False
+    if os.path.getsize(file_path) < 200000:
+        return False
+    cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", file_path]
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        dur = float(res.stdout.strip())
+        return dur > 1.0
+    except Exception:
+        return False
 
 def check_video_has_audio(file_path: str) -> bool:
     cmd = [
@@ -176,16 +190,18 @@ async def generate_voice(text: str, out_audio: str, voice_option: str):
     comm = edge_tts.Communicate(text, voice=v_code, rate="+4%")
     await comm.save(out_audio)
 
-def fetch_from_youtube_fast(query: str, used_hashes: set, dest_path: str) -> bool:
-    """Tải nhanh trực tiếp luồng MP4 tương thích cao nhất"""
+def fetch_from_youtube_direct_range(query: str, used_hashes: set, dest_path: str) -> bool:
+    """Tải đúng 20 giây đầu bằng external downloader ffmpeg để không bị crash container"""
     ydl_opts = {
-        'format': 'best[ext=mp4][height<=720]/bestvideo[height<=720]+bestaudio/best',
+        'format': 'best[ext=mp4][height<=720]/best[height<=720]/best',
         'default_search': 'ytsearch8',
         'max_downloads': 1,
         'outtmpl': dest_path,
         'quiet': True,
         'no_warnings': True,
-        'socket_timeout': 15
+        'socket_timeout': 15,
+        'downloader': 'ffmpeg',
+        'downloader_args': {'ffmpeg_i': ['-ss', '00:00:10', '-t', '00:00:20']}
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -196,11 +212,13 @@ def fetch_from_youtube_fast(query: str, used_hashes: set, dest_path: str) -> boo
                         continue
                     v_id = f"yt_{entry.get('id')}"
                     dur = entry.get('duration', 0)
-                    if v_id not in used_hashes and 10 <= dur <= 300:
+                    if v_id not in used_hashes and 15 <= dur <= 600:
                         ydl.download([entry['webpage_url']])
-                        if os.path.exists(dest_path):
+                        if verify_valid_video_file(dest_path):
                             used_hashes.add(v_id)
                             return True
+                        elif os.path.exists(dest_path):
+                            os.remove(dest_path)
     except Exception:
         pass
     return False
@@ -251,79 +269,63 @@ def fetch_from_pixabay(query: str, pb_key: str, used_hashes: set) -> str:
         pass
     return None
 
-def get_hybrid_broll(cat_mode: str, query: str, fallback_q: str, p_key: str, pb_key: str, used_hashes: set, raw_dest: str) -> bool:
-    if cat_mode == "youtube_only":
-        ok = fetch_from_youtube_fast(query, used_hashes, raw_dest)
-        if not ok:
-            ok = fetch_from_youtube_fast("moments filmed seconds before disaster", used_hashes, raw_dest)
-        return ok
+def get_broll_bulletproof(cat_mode: str, query: str, fallback_q: str, p_key: str, pb_key: str, used_hashes: set, raw_dest: str) -> bool:
+    """Tải clip an toàn: nếu YouTube lỗi hoặc bị chặn, tự động nhảy sang Pexels/Pixabay tránh crash"""
+    if cat_mode == "youtube_preferred":
+        ok = fetch_from_youtube_direct_range(query, used_hashes, raw_dest)
+        if ok and verify_valid_video_file(raw_dest):
+            return True
+        # Nếu YouTube fail, fallback sang Pexels lấy cảnh sóng biển bão tố
+        url = fetch_from_pexels(fallback_q, p_key, used_hashes) or fetch_from_pexels("storm waves ocean", p_key, used_hashes)
+        if url and download_file_safe(url, raw_dest):
+            return True
 
+    # Chế độ thông thường
     url = fetch_from_pexels(query, p_key, used_hashes)
     if not url and pb_key:
         url = fetch_from_pixabay(query, pb_key, used_hashes)
-    if url:
-        return download_file_safe(url, raw_dest)
+    if url and download_file_safe(url, raw_dest):
+        return True
 
     url = fetch_from_pexels(fallback_q, p_key, used_hashes)
-    if not url and pb_key:
-        url = fetch_from_pixabay(fallback_q, pb_key, used_hashes)
-    if url:
-        return download_file_safe(url, raw_dest)
+    if url and download_file_safe(url, raw_dest):
+        return True
 
-    return fetch_from_youtube_fast(query, used_hashes, raw_dest)
+    # Fallback cuối cùng
+    return fetch_from_youtube_direct_range(query, used_hashes, raw_dest)
 
-def process_scene_robust_two_pass(raw_v: str, voice_mp3: str, out_p: str, is_port: bool, raw_vol_float: float, workdir: str, idx: int):
+def cut_and_merge_scene_safe(raw_v: str, voice_mp3: str, out_p: str, is_port: bool, raw_vol_float: float, workdir: str, idx: int):
     """
-    Quy trình 2-Pass cô lập stream:
-    Pass 1: Trích 5s thô sang file tạm (bỏ qua phụ đề / data stream rác bằng -ignore_unknown -sn -dn).
-    Pass 2: Render scale, crop và hòa âm WAV 44.1kHz. Không bao giờ dính lỗi 254.
+    Quy trình chuẩn hóa an toàn:
+    - Loại bỏ hoàn toàn Input Seeking (-ss trước -i)
+    - Thêm cờ khống chế luồng: -threads 1, -preset fast
+    - Tách biệt audio và video hoàn toàn
     """
     res_f = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30" if is_port else "scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,fps=30"
 
-    # Lấy thời lượng file
-    cmd_dur = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", raw_v]
-    try:
-        raw_dur = float(subprocess.run(cmd_dur, capture_output=True, text=True).stdout.strip() or 10.0)
-    except Exception:
-        raw_dur = 10.0
-
-    start_sec = 0.5
-    if raw_dur > (CLIP_DURATION + 2.0):
-        start_sec = random.uniform(1.0, min(5.0, raw_dur - CLIP_DURATION - 0.5))
-
-    chunk_raw = os.path.join(workdir, f"chunk_raw_{idx:03d}.mp4")
     temp_v = os.path.join(workdir, f"tmp_v_{idx:03d}.mp4")
     norm_raw_wav = os.path.join(workdir, f"tmp_raw_{idx:03d}.wav")
     norm_voice_wav = os.path.join(workdir, f"tmp_voice_{idx:03d}.wav")
 
-    # PASS 1: Trích thô 5s sạch sẽ, loại bỏ data phụ trợ (-sn -dn -ignore_unknown)
+    # 1. Cắt video: Đặt `-ss 0` sau `-i` để đọc tuần tự, không nhảy keyframe
     subprocess.run([
         FFMPEG_EXE, "-y",
-        "-ss", f"{start_sec:.2f}",
-        "-t", f"{CLIP_DURATION:.3f}",
         "-i", raw_v,
-        "-ignore_unknown", "-sn", "-dn",
-        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26",
-        "-c:a", "aac",
-        chunk_raw
-    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-
-    # PASS 2A: Scale & Crop hình ảnh từ file thô đã chuẩn hóa
-    subprocess.run([
-        FFMPEG_EXE, "-y",
-        "-i", chunk_raw,
+        "-ss", "0.5",
+        "-t", f"{CLIP_DURATION:.3f}",
         "-vf", res_f,
         "-an",
-        "-c:v", "libx264", "-preset", "veryfast",
+        "-c:v", "libx264", "-preset", "fast", "-threads", "1",
         temp_v
     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
-    # PASS 2B: Trích âm gốc từ file thô
-    has_audio = check_video_has_audio(chunk_raw)
+    # 2. Chuẩn hóa âm thanh gốc
+    has_audio = check_video_has_audio(raw_v)
     if has_audio:
         subprocess.run([
             FFMPEG_EXE, "-y",
-            "-i", chunk_raw,
+            "-i", raw_v,
+            "-ss", "0.5",
             "-t", f"{CLIP_DURATION:.3f}",
             "-ar", "44100", "-ac", "2",
             norm_raw_wav
@@ -331,14 +333,14 @@ def process_scene_robust_two_pass(raw_v: str, voice_mp3: str, out_p: str, is_por
     else:
         subprocess.run([
             FFMPEG_EXE, "-y",
-            "-f", "lavfi", "-i", "anoisesrc=d=5:c=pink:r=44100:a=0.08",
+            "-f", "lavfi", "-i", "anoisesrc=d=5:c=pink:r=44100:a=0.1",
             "-af", "lowpass=f=1200",
             "-t", f"{CLIP_DURATION:.3f}",
             "-ar", "44100", "-ac", "2",
             norm_raw_wav
         ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
-    # PASS 2C: Chuẩn hóa voice đọc
+    # 3. Chuẩn hóa voice đọc
     subprocess.run([
         FFMPEG_EXE, "-y",
         "-i", voice_mp3,
@@ -347,7 +349,7 @@ def process_scene_robust_two_pass(raw_v: str, voice_mp3: str, out_p: str, is_por
         norm_voice_wav
     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
-    # PASS 2D: Mux hoàn chỉnh
+    # 4. Hòa âm và đóng gói
     subprocess.run([
         FFMPEG_EXE, "-y",
         "-i", temp_v,
@@ -363,8 +365,7 @@ def process_scene_robust_two_pass(raw_v: str, voice_mp3: str, out_p: str, is_por
         out_p
     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
-    # Dọn dẹp trung gian
-    for p in [chunk_raw, temp_v, norm_raw_wav, norm_voice_wav]:
+    for p in [temp_v, norm_raw_wav, norm_voice_wav]:
         if os.path.exists(p):
             os.remove(p)
 
@@ -372,8 +373,8 @@ def process_scene_robust_two_pass(raw_v: str, voice_mp3: str, out_p: str, is_por
 # PIPELINE SẢN XUẤT CHÍNH
 # ==============================================================================
 if st.button("🚀 Bắt Đầu Sản Xuất Master Pro Max", use_container_width=True, type="primary"):
-    status = st.status(f"Hệ thống đang sản xuất {calc_clips} phân cảnh...", expanded=True)
-    workdir = tempfile.mkdtemp(prefix="master_hardened_")
+    status = st.status(f"Hệ thống đang chuẩn bị sản xuất {calc_clips} phân cảnh...", expanded=True)
+    workdir = tempfile.mkdtemp(prefix="master_safe_prod_")
     used_hashes = set()
     is_port = "portrait" in orientation_opt
     is_en = "Tiếng Anh" in voice_choice
@@ -425,9 +426,9 @@ Return ONLY a JSON array with exactly {needed} strings. Example:
 
             for line in batch_lines:
                 idx = len(parsed_scenes)
-                if engine_mode == "youtube_only":
+                if engine_mode == "youtube_preferred":
                     q_val = pool[idx % len(pool)]
-                    fb_val = q_val
+                    fb_val = "storm waves crashing ship"
                 else:
                     item_pool = pool[idx % len(pool)]
                     q_val = item_pool[0]
@@ -454,7 +455,7 @@ Return ONLY a JSON array with exactly {needed} strings. Example:
             })
 
         # 3. Tải B-roll và xử lý phân cảnh đúng ≤ 5s
-        status.update(label=f"🎬 3/4: Đang trích xuất video thực tế ({engine_mode})...")
+        status.update(label=f"🎬 3/4: Đang trích xuất B-roll an toàn...")
         clips_txt = os.path.join(workdir, "clips.txt")
 
         with open(clips_txt, "w", encoding="utf-8") as f_cl:
@@ -462,12 +463,13 @@ Return ONLY a JSON array with exactly {needed} strings. Example:
                 raw_v = os.path.join(workdir, f"r_{idx:03d}.mp4")
                 scene_v = os.path.join(workdir, f"scene_{idx:03d}.mp4")
 
-                ok = get_hybrid_broll(engine_mode, sc["query"], sc["fallback"], pexels_key, pixabay_key, used_hashes, raw_v)
+                ok = get_broll_bulletproof(engine_mode, sc["query"], sc["fallback"], pexels_key, pixabay_key, used_hashes, raw_v)
                 if not ok:
-                    fallback_base = pool[0] if engine_mode == "youtube_only" else pool[0][0]
-                    get_hybrid_broll(engine_mode, fallback_base, fallback_base, pexels_key, pixabay_key, used_hashes, raw_v)
+                    # Fallback tuyệt đối từ Pexels nếu toàn bộ nguồn lỗi
+                    fallback_url = fetch_from_pexels("ocean storm waves", pexels_key, used_hashes)
+                    download_file_safe(fallback_url, raw_v)
 
-                process_scene_robust_two_pass(raw_v, sc["audio"], scene_v, is_port, raw_vol_float, workdir, idx)
+                cut_and_merge_scene_safe(raw_v, sc["audio"], scene_v, is_port, raw_vol_float, workdir, idx)
 
                 if os.path.exists(raw_v):
                     os.remove(raw_v)
