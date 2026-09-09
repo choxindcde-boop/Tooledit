@@ -3,3 +3,5 @@ requests
 imageio-ffmpeg
 groq
 edge-tts
+yt-dlp
+
