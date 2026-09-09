@@ -1,6 +1,7 @@
 streamlit
 requests
-groq
 imageio-ffmpeg
+groq
 edge-tts
+yt-dlp
 
