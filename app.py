@@ -27,11 +27,8 @@ LLM_MODEL = "openai/gpt-oss-120b"
 PEXELS_VIDEO_URL = "https://api.pexels.com/videos/search"
 PIXABAY_VIDEO_URL = "https://pixabay.com/api/videos/"
 
-AMBIENT_SFX = {
-    "storm": "https://upload.wikimedia.org/wikipedia/commons/2/27/Thunderstorm_sound.ogg",
-    "nature": "https://upload.wikimedia.org/wikipedia/commons/e/ea/Bird_songs_in_forest.ogg",
-    "bgm": "https://upload.wikimedia.org/wikipedia/commons/4/4c/Scott_Buckley_-_Aurora.mp3"
-}
+# Nhạc nền an toàn MP3 chuẩn
+BGM_URL = "https://upload.wikimedia.org/wikipedia/commons/4/4c/Scott_Buckley_-_Aurora.mp3"
 
 try:
     groq_key = st.secrets["GROQ_API_KEY"]
@@ -42,7 +39,7 @@ except Exception:
     st.stop()
 
 st.title("⚡ Studio POV Story Master (Bản Sửa Triệt Để Lỗi 254)")
-st.caption("Xử lý Stream tách biệt • Giữ trọn âm thanh gốc/môi trường • Không crash FFmpeg")
+st.caption("Khóa chuẩn Audio WAV PCM 44.1kHz • Không dùng OGG • Chạy mượt trên FFmpeg v7")
 
 SUBJECT_POOLS = {
     "Thảm họa Tàu thuyền / Bão biển / Sóng thần": [
@@ -205,19 +202,19 @@ def get_broll_clip(query: str, fallback_query: str, p_key: str, pb_key: str, use
         clip = fetch_from_pixabay(fallback_query, pb_key, used_hashes)
     return clip
 
-def process_single_scene_bulletproof(raw_v: str, voice_a: str, amb_a: str, out_p: str, is_port: bool, amb_vol: float):
+def process_single_scene_robust(raw_v: str, voice_mp3: str, out_p: str, is_port: bool, amb_vol: float, workdir: str, idx: int):
     """
-    Quy trình xử lý phân cảnh độc lập 100% không bao giờ dính lỗi 254:
-    1. Cắt video sang file tạm (chỉ thuần hình ảnh, scale/crop, fps 30).
-    2. Chuẩn hóa audio: lấy tiếng gốc nếu có, hoặc lấy tiếng môi trường ambient.
-    3. Hòa âm Voice + Ambient thành 1 luồng duy nhất đúng 5.0 giây.
-    4. Ghép Video + Audio thành file cảnh hoàn chỉnh.
+    Quy trình hòa âm & ghép clip chuẩn PCM WAV (Triệt tiêu 100% lỗi 254):
+    1. Cắt video sạch 5s (không mang cờ audio).
+    2. Chuẩn hóa voice sang WAV 44.1kHz stereo.
+    3. Chuẩn hóa ambient/tiếng gốc sang WAV 44.1kHz stereo dài đúng 5s.
+    4. Trộn 2 file WAV đồng bộ bằng amix không bao giờ bị lệch samplerate.
+    5. Mux video và audio thành phẩm.
     """
     res_f = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30" if is_port else "scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,fps=30"
     
-    # 1. Cắt video thuần túy
-    tmp_dir = os.path.dirname(out_p)
-    temp_v = os.path.join(tmp_dir, f"tmp_v_{os.path.basename(out_p)}")
+    # 1. Cắt hình ảnh đúng 5 giây
+    temp_v = os.path.join(workdir, f"tmp_v_{idx:03d}.mp4")
     cmd_v = [
         FFMPEG_EXE, "-y",
         "-i", raw_v,
@@ -229,37 +226,61 @@ def process_single_scene_bulletproof(raw_v: str, voice_a: str, amb_a: str, out_p
     ]
     subprocess.run(cmd_v, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
-    # 2. Xác định nguồn âm thanh môi trường
-    has_audio = check_video_has_audio(raw_v)
-    source_ambient = raw_v if has_audio else amb_a
-
-    # 3. Hòa âm (Voice 1.0 + Môi trường/Tiếng gốc amb_vol) đúng 5s
-    temp_a = os.path.join(tmp_dir, f"tmp_a_{os.path.basename(out_p)}.aac")
-    cmd_a = [
+    # 2. Chuyển voice về WAV chuẩn (44.1kHz, 2 kênh stereo)
+    norm_voice_wav = os.path.join(workdir, f"norm_voice_{idx:03d}.wav")
+    cmd_voice = [
         FFMPEG_EXE, "-y",
-        "-i", source_ambient,
-        "-i", voice_a,
-        "-filter_complex",
-        f"[0:a]volume={amb_vol:.2f},afade=t=in:ss=0:d=0.2,afade=t=out:st=4.8:d=0.2[a0];[1:a]volume=1.0[a1];[a0][a1]amix=inputs=2:duration=first[aout]",
-        "-map", "[aout]",
+        "-i", voice_mp3,
         "-t", f"{CLIP_DURATION:.3f}",
-        "-c:a", "aac", "-b:a", "192k",
-        temp_a
+        "-ar", "44100", "-ac", "2",
+        norm_voice_wav
     ]
-    subprocess.run(cmd_a, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+    subprocess.run(cmd_voice, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
-    # 4. Đóng gói thành phẩm 1 cảnh
+    # 3. Chuẩn hóa track môi trường / tiếng gốc sang WAV đúng 5s
+    norm_amb_wav = os.path.join(workdir, f"norm_amb_{idx:03d}.wav")
+    has_audio = check_video_has_audio(raw_v)
+    
+    if has_audio:
+        # Lấy âm gốc từ video
+        cmd_amb = [
+            FFMPEG_EXE, "-y",
+            "-i", raw_v,
+            "-t", f"{CLIP_DURATION:.3f}",
+            "-ar", "44100", "-ac", "2",
+            norm_amb_wav
+        ]
+    else:
+        # Sinh tiếng sóng/gió hồng tự nhiên (pink noise) bằng filter của FFmpeg, không cần tải OGG ngoài
+        cmd_amb = [
+            FFMPEG_EXE, "-y",
+            "-f", "lavfi", "-i", "anoisesrc=d=5:c=pink:r=44100:a=0.1",
+            "-af", "lowpass=f=1000",
+            "-t", f"{CLIP_DURATION:.3f}",
+            "-ar", "44100", "-ac", "2",
+            norm_amb_wav
+        ]
+    subprocess.run(cmd_amb, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+
+    # 4. Trộn 2 file WAV chuẩn và đóng gói vào MP4 thành phẩm
     cmd_mux = [
         FFMPEG_EXE, "-y",
         "-i", temp_v,
-        "-i", temp_a,
-        "-c", "copy",
+        "-i", norm_amb_wav,
+        "-i", norm_voice_wav,
+        "-filter_complex",
+        f"[1:a]volume={amb_vol:.2f},afade=t=in:ss=0:d=0.2,afade=t=out:st=4.8:d=0.2[a0];[2:a]volume=1.0[a1];[a0][a1]amix=inputs=2:duration=first:dropout_transition=0[aout]",
+        "-map", "0:v:0",
+        "-map", "[aout]",
+        "-c:v", "copy",
+        "-c:a", "aac", "-b:a", "192k",
+        "-t", f"{CLIP_DURATION:.3f}",
         out_p
     ]
     subprocess.run(cmd_mux, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
-    # Dọn file đệm
-    for p in [temp_v, temp_a]:
+    # Dọn các file WAV đệm
+    for p in [temp_v, norm_voice_wav, norm_amb_wav]:
         if os.path.exists(p):
             os.remove(p)
 
@@ -279,13 +300,8 @@ if st.button("🚀 Bắt Đầu Sản Xuất Master Hoàn Hảo", use_container_
         try:
             client = Groq(api_key=groq_key.strip())
 
-            # Chuẩn bị track âm thanh môi trường
-            ambient_file = os.path.join(workdir, "ambient.ogg")
-            amb_url = AMBIENT_SFX["storm"] if any(w in topic_genre.lower() for w in ["bão", "tàu", "sóng", "ocean", "sea", "storm"]) else AMBIENT_SFX["nature"]
-            download_file_safe(amb_url, ambient_file)
-
             # 1. Sinh kịch bản Batch
-            status.update(label=f"🧠 1/4: {LLM_MODEL} đang sinh kịch bản...")
+            status.update(label=f"🧠 1/4: {LLM_MODEL} đang xây dựng câu chuyện...")
             if selected_category in SUBJECT_POOLS:
                 pool = SUBJECT_POOLS[selected_category]
             else:
@@ -350,8 +366,8 @@ Return ONLY a JSON array with exactly {needed} strings. Example:
                     "dur": CLIP_DURATION
                 })
 
-            # 3. Tải B-roll và xử lý từng cảnh an toàn tuyệt đối
-            status.update(label="🎬 3/4: Tải B-roll & đóng gói phân cảnh...")
+            # 3. Tải B-roll và xử lý âm thanh từng cảnh
+            status.update(label="🎬 3/4: Tải B-roll & chuẩn hóa audio 44.1kHz...")
             clips_txt = os.path.join(workdir, "clips.txt")
             amb_vol_float = ambient_volume / 100.0
 
@@ -365,7 +381,7 @@ Return ONLY a JSON array with exactly {needed} strings. Example:
                     scene_v = os.path.join(workdir, f"scene_{idx:03d}.mp4")
                     download_file_safe(v_url, raw_v)
 
-                    process_single_scene_bulletproof(raw_v, sc["audio"], ambient_file, scene_v, is_port, amb_vol_float)
+                    process_single_scene_robust(raw_v, sc["audio"], scene_v, is_port, amb_vol_float, workdir, idx)
                     
                     if os.path.exists(raw_v):
                         os.remove(raw_v)
@@ -373,7 +389,7 @@ Return ONLY a JSON array with exactly {needed} strings. Example:
                     f_cl.write(f"file '{os.path.abspath(scene_v)}'\n")
 
             # 4. Xuất Master + Lồng BGM
-            status.update(label="⚡ 4/4: Nối các phân cảnh và hoàn tất Master...", state="running")
+            status.update(label="⚡ 4/4: Ghép nối Master thành phẩm...", state="running")
             temp_merged = os.path.join(workdir, "temp_merged.mp4")
             final_mp4 = os.path.join(workdir, "master_story_pro.mp4")
 
@@ -383,7 +399,7 @@ Return ONLY a JSON array with exactly {needed} strings. Example:
             ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
             bgm_path = os.path.join(workdir, "bgm.mp3")
-            has_bgm = (bgm_volume > 0) and download_file_safe(AMBIENT_SFX["bgm"], bgm_path)
+            has_bgm = (bgm_volume > 0) and download_file_safe(BGM_URL, bgm_path)
             vol_float = bgm_volume / 100.0
 
             if has_bgm:
@@ -391,7 +407,7 @@ Return ONLY a JSON array with exactly {needed} strings. Example:
                     FFMPEG_EXE, "-y",
                     "-i", temp_merged,
                     "-stream_loop", "-1", "-i", bgm_path,
-                    "-filter_complex", f"[0:a]volume=1.0[a0];[1:a]volume={vol_float:.2f}[a1];[a0][a1]amix=inputs=2:duration=first[aout]",
+                    "-filter_complex", f"[0:a]volume=1.0[a0];[1:a]volume={vol_float:.2f}[a1];[a0][a1]amix=inputs=2:duration=first:dropout_transition=0[aout]",
                     "-map", "0:v:0",
                     "-map", "[aout]",
                     "-c:v", "copy",
