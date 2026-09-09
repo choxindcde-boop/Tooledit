@@ -27,21 +27,13 @@ LLM_MODEL = "openai/gpt-oss-120b"
 PEXELS_VIDEO_URL = "https://api.pexels.com/videos/search"
 PIXABAY_VIDEO_URL = "https://pixabay.com/api/videos/"
 
-# Nhạc nền BGM MP3 chuẩn (Không dùng OGG để tránh lỗi 254)
+# Nhạc nền BGM chuẩn Wikimedia
 CINEMATIC_BGM_URL = "https://upload.wikimedia.org/wikipedia/commons/4/4c/Scott_Buckley_-_Aurora.mp3"
-# Âm thanh bão biển gầm rú MP3 chuẩn
-REAL_STORM_SFX_MP3 = "https://cdn.freesound.org/previews/512/512130_6142149-lq.mp3"
 
-# KHO VIDEO THẢM HỌA THỰC TẾ TRỰC TIẾP (Tải trực tiếp MP4 có sẵn âm thanh hiện trường, không bị Bot Check)
+# Kho footage thực tế bão biển từ Internet Archive & Wikimedia (Trực tiếp, không chặn bot)
 DISASTER_REAL_VIDEOS = [
-    # Cảnh sóng biển Bắc Hải đập mạn tàu (Có tiếng sóng gió thật)
-    "https://ia600708.us.archive.org/28/items/NorthSeaStormFootage/NorthSeaStorm.mp4",
-    # Tàu vượt sóng lớn đại dương quay từ buồng lái
     "https://upload.wikimedia.org/wikipedia/commons/transcoded/8/87/Rough_seas_aboard_the_RRS_James_Clark_Ross.webm/Rough_seas_aboard_the_RRS_James_Clark_Ross.webm.720p.vp9.webm",
-    # Bão biển dữ dội đánh dạt mạn thuyền
-    "https://upload.wikimedia.org/wikipedia/commons/transcoded/a/a2/Wave_crashing_over_the_bow_of_a_ship.ogv/Wave_crashing_over_the_bow_of_a_ship.ogv.720p.webm",
-    # Sóng thần và gió giật biển khơi
-    "https://ia800201.us.archive.org/12/items/BigWavesHittingBoat/BigWaves.mp4"
+    "https://upload.wikimedia.org/wikipedia/commons/transcoded/a/a2/Wave_crashing_over_the_bow_of_a_ship.ogv/Wave_crashing_over_the_bow_of_a_ship.ogv.720p.webm"
 ]
 
 try:
@@ -53,11 +45,11 @@ except Exception:
     st.stop()
 
 st.title("🎬 Studio POV Master Pro Max")
-st.caption("Kho Video Thực Tế Mở • 100% Âm Thanh Hiện Trường Thật • Loại bỏ hoàn toàn lỗi 254")
+st.caption("Khắc phục hoàn toàn lỗi tải file giả • Tạo âm thanh môi trường nội bộ FFmpeg • Cắt ghép chuẩn ≤ 5.0s")
 
 CATEGORY_SETTINGS = {
     "💥 Tổng hợp tai nạn, thảm họa, khoảnh khắc hiểm nghèo thực tế": {
-        "engine": "archive_real_disaster",
+        "engine": "disaster_hybrid",
         "search_pool": [
             "cargo ship heavy storm waves",
             "massive ocean storm wave crashing",
@@ -129,7 +121,7 @@ col_opt1, col_opt2 = st.columns(2)
 with col_opt1:
     orientation_opt = st.selectbox("Khung hình xuất bản:", ["landscape (Ngang 16:9 YouTube Chuẩn)", "portrait (Dọc 9:16 Shorts/TikTok)"])
 with col_opt2:
-    raw_vol = st.slider("Âm lượng tiếng gốc hiện trường (Sóng/Gió/Động cơ) (%):", min_value=40, max_value=180, value=110, step=10)
+    raw_vol = st.slider("Âm lượng tiếng hiện trường (Sóng/Gió/Động cơ) (%):", min_value=40, max_value=180, value=110, step=10)
 
 bgm_volume = st.slider("Âm lượng nhạc nền ngầm BGM (%):", min_value=0, max_value=40, value=15, step=5)
 
@@ -138,7 +130,7 @@ bgm_volume = st.slider("Âm lượng nhạc nền ngầm BGM (%):", min_value=0,
 # ==============================================================================
 
 def download_file_safe(url: str, dest: str) -> bool:
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    headers = {"User-Agent": "Mozilla/5.0"}
     try:
         with requests.get(url, headers=headers, stream=True, timeout=25) as r:
             if r.status_code == 200:
@@ -235,21 +227,16 @@ def fetch_from_pixabay(query: str, pb_key: str, used_hashes: set) -> str:
         pass
     return None
 
-def get_broll_reliable(cat_mode: str, query: str, fallback_q: str, p_key: str, pb_key: str, used_hashes: set, raw_dest: str, clip_idx: int) -> bool:
-    """Tải B-roll trực tiếp tốc độ cao không bị phụ thuộc vào YouTube Bot Check"""
-    if cat_mode == "archive_real_disaster":
-        # 1. Tải video bão biển thật từ kho tư liệu mở
+def get_broll_failproof(cat_mode: str, query: str, fallback_q: str, p_key: str, pb_key: str, used_hashes: set, raw_dest: str, clip_idx: int) -> bool:
+    if cat_mode == "disaster_hybrid":
         direct_url = DISASTER_REAL_VIDEOS[clip_idx % len(DISASTER_REAL_VIDEOS)]
-        ok = download_file_safe(direct_url, raw_dest)
-        if ok and verify_valid_media(raw_dest):
+        if download_file_safe(direct_url, raw_dest) and verify_valid_media(raw_dest):
             return True
 
-        # 2. Dự phòng: Tải video sóng thần bão biển nét từ Pexels
         p_url = fetch_from_pexels(query, p_key, used_hashes) or fetch_from_pexels("storm waves ocean heavy", p_key, used_hashes)
         if p_url and download_file_safe(p_url, raw_dest):
             return True
 
-    # Thể loại Động vật / Xe: Dùng Pexels -> Pixabay
     url = fetch_from_pexels(query, p_key, used_hashes)
     if not url and pb_key:
         url = fetch_from_pixabay(query, pb_key, used_hashes)
@@ -262,12 +249,13 @@ def get_broll_reliable(cat_mode: str, query: str, fallback_q: str, p_key: str, p
 
     return download_file_safe(DISASTER_REAL_VIDEOS[0], raw_dest)
 
-def cut_and_mix_5s_bulletproof(raw_v: str, voice_mp3: str, backup_storm_mp3: str, out_p: str, is_port: bool, raw_vol_float: float, workdir: str, idx: int):
+def cut_and_mix_5s_bulletproof(raw_v: str, voice_mp3: str, out_p: str, is_port: bool, raw_vol_float: float, workdir: str, idx: int):
     """
-    Quy trình cắt ghép chống crash FFmpeg 254:
-    - Tuyệt đối không đọc file .ogg.
-    - Chuẩn hóa âm thanh qua MP3/WAV 44.1kHz Stereo.
-    - Cắt đúng 5.0 giây, khuếch đại âm thanh hiện trường sống động.
+    Quy trình hòa âm an toàn tuyệt đối:
+    1. Cắt video hình ảnh độc lập.
+    2. Nếu video có audio gốc: Trích xuất và chuẩn hóa sang WAV 44.1kHz.
+       Nếu video câm: Sinh âm thanh gió bão/sóng gầm trực tiếp từ bộ lọc nội bộ của FFmpeg (anoisesrc).
+    3. Trộn voice và audio môi trường rồi đóng gói vào MP4.
     """
     res_f = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30" if is_port else "scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,fps=30"
 
@@ -279,13 +267,13 @@ def cut_and_mix_5s_bulletproof(raw_v: str, voice_mp3: str, backup_storm_mp3: str
 
     start_sec = 0.5
     if raw_dur > (CLIP_DURATION + 2.0):
-        start_sec = random.uniform(0.5, min(6.0, raw_dur - CLIP_DURATION - 0.5))
+        start_sec = random.uniform(0.5, min(5.0, raw_dur - CLIP_DURATION - 0.5))
 
     temp_v = os.path.join(workdir, f"tmp_v_{idx:03d}.mp4")
     norm_env_wav = os.path.join(workdir, f"tmp_env_{idx:03d}.wav")
     norm_voice_wav = os.path.join(workdir, f"tmp_voice_{idx:03d}.wav")
 
-    # 1. Cắt video hình ảnh (không kèm âm thanh)
+    # 1. Cắt hình ảnh
     subprocess.run([
         FFMPEG_EXE, "-y",
         "-i", raw_v,
@@ -297,7 +285,7 @@ def cut_and_mix_5s_bulletproof(raw_v: str, voice_mp3: str, backup_storm_mp3: str
         temp_v
     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
-    # 2. Xử lý âm thanh hiện trường (nếu video có tiếng thì dùng tiếng gốc, nếu câm thì inject tiếng bão MP3)
+    # 2. Xử lý âm thanh môi trường nội bộ
     has_audio = check_video_has_audio(raw_v)
     if has_audio:
         subprocess.run([
@@ -309,10 +297,11 @@ def cut_and_mix_5s_bulletproof(raw_v: str, voice_mp3: str, backup_storm_mp3: str
             norm_env_wav
         ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
     else:
+        # Tự tạo tiếng gió bão gầm rú chân thực từ bộ lọc nội tại anoisesrc của FFmpeg
         subprocess.run([
             FFMPEG_EXE, "-y",
-            "-i", backup_storm_mp3,
-            "-ss", f"{(idx * 5) % 20}",
+            "-f", "lavfi", "-i", "anoisesrc=d=5:c=brown:r=44100:a=0.35",
+            "-af", "lowpass=f=900,tremolo=f=0.5:d=0.7",
             "-t", f"{CLIP_DURATION:.3f}",
             "-ar", "44100", "-ac", "2",
             norm_env_wav
@@ -350,7 +339,7 @@ def cut_and_mix_5s_bulletproof(raw_v: str, voice_mp3: str, backup_storm_mp3: str
 # ==============================================================================
 # PIPELINE SẢN XUẤT CHÍNH
 # ==============================================================================
-if st.button("🚀 Bắt Đầu Dựng Video Thực Tế (Fixed 254 & YouTube)", use_container_width=True, type="primary"):
+if st.button("🚀 Bắt Đầu Dựng Video Thực Tế Pro Max", use_container_width=True, type="primary"):
     status = st.status(f"Hệ thống đang chuẩn bị sản xuất {calc_clips} phân cảnh...", expanded=True)
     workdir = tempfile.mkdtemp(prefix="master_robust_")
     used_hashes = set()
@@ -361,11 +350,6 @@ if st.button("🚀 Bắt Đầu Dựng Video Thực Tế (Fixed 254 & YouTube)",
 
     try:
         client = Groq(api_key=groq_key.strip())
-
-        # Tải sẵn file âm thanh bão biển MP3 chuẩn (Bỏ hoàn toàn file OGG)
-        status.update(label="🌊 Đang thiết lập kênh âm thanh hiện trường MP3 chuẩn...")
-        backup_storm_path = os.path.join(workdir, "storm_real.mp3")
-        download_file_safe(REAL_STORM_SFX_MP3, backup_storm_path)
 
         # 1. AI biên soạn kịch bản
         status.update(label=f"🧠 1/4: {LLM_MODEL} đang xây dựng câu chuyện...")
@@ -409,7 +393,7 @@ Return ONLY a JSON array with exactly {needed} strings. Example:
 
             for line in batch_lines:
                 idx = len(parsed_scenes)
-                if engine_mode == "archive_real_disaster":
+                if engine_mode == "disaster_hybrid":
                     q_val = pool[idx % len(pool)]
                     fb_val = "ocean storm heavy rough waves"
                 else:
@@ -446,9 +430,9 @@ Return ONLY a JSON array with exactly {needed} strings. Example:
                 raw_v = os.path.join(workdir, f"r_{idx:03d}.mp4")
                 scene_v = os.path.join(workdir, f"scene_{idx:03d}.mp4")
 
-                get_broll_reliable(engine_mode, sc["query"], sc["fallback"], pexels_key, pixabay_key, used_hashes, raw_v, idx)
+                get_broll_failproof(engine_mode, sc["query"], sc["fallback"], pexels_key, pixabay_key, used_hashes, raw_v, idx)
 
-                cut_and_mix_5s_bulletproof(raw_v, sc["audio"], backup_storm_path, scene_v, is_port, raw_vol_float, workdir, idx)
+                cut_and_mix_5s_bulletproof(raw_v, sc["audio"], scene_v, is_port, raw_vol_float, workdir, idx)
 
                 if os.path.exists(raw_v):
                     os.remove(raw_v)
