@@ -19,7 +19,7 @@ import edge_tts
 
 FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
 
-st.set_page_config(page_title="Studio POV Master Pro Max", page_icon="🎬", layout="centered")
+st.set_page_config(page_title="Studio POV Master Pro Max", page_icon="⚡", layout="centered")
 
 FPS = 30
 CLIP_DURATION = 5.0
@@ -29,13 +29,13 @@ PIXABAY_VIDEO_URL = "https://pixabay.com/api/videos/"
 
 CINEMATIC_BGM_URL = "https://upload.wikimedia.org/wikipedia/commons/4/4c/Scott_Buckley_-_Aurora.mp3"
 
-SFX_ASSETS = {
-    "airplane": "https://upload.wikimedia.org/wikipedia/commons/transcoded/5/5a/Jet_flyby.ogg/Jet_flyby.ogg.mp3",
-    "ship": "https://upload.wikimedia.org/wikipedia/commons/transcoded/2/27/Thunderstorm_sound.ogg/Thunderstorm_sound.ogg.mp3",
-    "disaster": "https://upload.wikimedia.org/wikipedia/commons/transcoded/2/27/Thunderstorm_sound.ogg/Thunderstorm_sound.ogg.mp3",
-    "nature": "https://upload.wikimedia.org/wikipedia/commons/transcoded/e/ea/Bird_songs_in_forest.ogg/Bird_songs_in_forest.ogg.mp3",
-    "car": "https://upload.wikimedia.org/wikipedia/commons/transcoded/5/5a/Jet_flyby.ogg/Jet_flyby.ogg.mp3"
-}
+# DANH SÁCH GATEWAY INVIDIOUS VƯỢT BOT-CHECK YOUTUBE
+INVIDIOUS_INSTANCES = [
+    "https://inv.tux.pizza",
+    "https://invidious.nerdvpn.de",
+    "https://invidious.private.coffee",
+    "https://yt.artemislena.eu"
+]
 
 try:
     groq_key = st.secrets["GROQ_API_KEY"]
@@ -45,18 +45,21 @@ except Exception:
     st.error("Chưa cấu hình API Key trong mục Secrets của Streamlit Cloud!")
     st.stop()
 
-st.title("🎬 Studio POV Master Pro Max")
-st.caption("Tai nạn/Bão biển cào kho mở Wikimedia & Archive • Động vật/Xe dùng Pexels • Cắt đúng ≤ 5.0s")
+st.title("⚡ Studio POV Master Pro Max (YouTube Direct Footage)")
+st.caption("Cào trực tiếp YouTube Footage qua Invidious Gateway • Giữ nguyên tiếng hiện trường • Chuẩn phong cách Seconds Before Disaster")
 
+# ==============================================================================
+# DANH MỤC THỂ LOẠI
+# ==============================================================================
 CATEGORY_SETTINGS = {
     "💥 Tổng hợp tai nạn, thảm họa, khoảnh khắc hiểm nghèo thực tế": {
-        "engine": "open_archive_disaster",
-        "default_topic": "Các vụ tai nạn máy bay hạ cánh khẩn cấp trong bão, tàu lớn chao đảo giữa sóng thần",
+        "engine": "youtube_invidious",
+        "default_topic": "Incredible plane crashes emergency landing and cargo ship heavy storm waves caught on camera",
         "search_pool": [
-            ("airplane emergency landing accident", "aircraft storm"),
-            ("rough seas ship wave crash storm", "ship heavy weather"),
-            ("airplane cockpit turbulence crosswind", "cockpit emergency"),
-            ("rescue boat extreme storm waves", "boat storm ocean")
+            "airplane emergency landing incident real footage caught on camera",
+            "cargo ship heavy storm waves rough sea caught on camera",
+            "airplane crosswind rough landing extreme",
+            "ship disaster massive ocean wave hitting boat"
         ],
         "default_voice": "Tiếng Anh: Guy (Nam thời sự / Thảm họa Seconds Before Disaster)",
         "prompt_tone": "Khẩn cấp, dồn dập, nguy hiểm tột độ phong cách phóng sự Seconds Before Disaster"
@@ -68,8 +71,7 @@ CATEGORY_SETTINGS = {
             ("cute golden retriever puppy playing barking", "puppy dog"),
             ("baby panda climbing bamboo", "baby panda"),
             ("little kitten playing meowing", "kitten cat"),
-            ("fluffy bunny rabbit eating carrot", "cute bunny"),
-            ("playful sea otter floating water", "sea otter")
+            ("fluffy bunny rabbit eating carrot", "cute bunny")
         ],
         "default_voice": "Tiếng Anh: Ana (Giọng hoạt hình / Vui tươi)",
         "prompt_tone": "Ngộ nghĩnh, tươi vui, tràn ngập năng lượng tích cực và đáng yêu"
@@ -130,172 +132,76 @@ col_opt1, col_opt2 = st.columns(2)
 with col_opt1:
     orientation_opt = st.selectbox("Khung hình xuất bản:", ["landscape (Ngang 16:9 YouTube Chuẩn)", "portrait (Dọc 9:16 Shorts/TikTok)"])
 with col_opt2:
-    raw_vol = st.slider("Âm lượng tiếng hiện trường (Gió/Động cơ/Sóng) (%):", min_value=30, max_value=180, value=110, step=10)
+    raw_vol = st.slider("Âm lượng tiếng hiện trường (Gió/Động cơ/Sóng/Còi) (%):", min_value=40, max_value=200, value=120, step=10)
 
 bgm_volume = st.slider("Âm lượng nhạc nền ngầm BGM (%):", min_value=0, max_value=40, value=15, step=5)
 
 # ==============================================================================
-# HÀM CÀO VIDEO KHO MỞ (WIKIMEDIA & ARCHIVE.ORG)
+# HÀM CÀO YOUTUBE QUA INVIDIOUS GATEWAY
 # ==============================================================================
 
-def download_file_safe(url: str, dest: str) -> bool:
+def search_youtube_invidious_stream(query: str, used_hashes: set) -> tuple:
+    """Tìm kiếm YouTube qua Invidious API để lấy trực tiếp URL stream MP4 có âm thanh"""
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-    try:
-        with requests.get(url, headers=headers, stream=True, timeout=25) as r:
-            if r.status_code == 200:
-                with open(dest, "wb") as f:
-                    for chunk in r.iter_content(chunk_size=32768):
-                        f.write(chunk)
-                return os.path.exists(dest) and os.path.getsize(dest) > 20000
-    except Exception:
-        pass
-    return False
-
-def check_video_has_audio(file_path: str) -> bool:
-    cmd = [
-        "ffprobe", "-v", "error", "-select_streams", "a",
-        "-show_entries", "stream=codec_type", "-of", "default=noprint_wrappers=1:nokey=1",
-        file_path
-    ]
-    try:
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-        return "audio" in res.stdout.strip()
-    except Exception:
-        return False
-
-def search_wikimedia_commons_video(query: str, used_hashes: set) -> str:
-    """Tìm video tài liệu thật trên Wikimedia Commons qua API mở không bao giờ chặn bot"""
-    api_url = "https://commons.wikimedia.org/w/api.php"
-    params = {
-        "action": "query",
-        "format": "json",
-        "list": "search",
-        "srsearch": f"{query} filetype:video",
-        "srnamespace": "6",
-        "srlimit": "8"
-    }
-    headers = {"User-Agent": "POVStudioTool/2.0"}
-    try:
-        r = requests.get(api_url, params=params, headers=headers, timeout=8)
-        if r.ok:
-            results = r.json().get("query", {}).get("search", [])
-            for item in results:
-                title = item.get("title", "")
-                if title not in used_hashes:
-                    # Lấy link direct stream
-                    info_params = {
-                        "action": "query",
-                        "format": "json",
-                        "titles": title,
-                        "prop": "imageinfo",
-                        "iiprop": "url|mediatype"
-                    }
-                    info_r = requests.get(api_url, params=info_params, headers=headers, timeout=8)
-                    pages = info_r.json().get("query", {}).get("pages", {})
-                    for _, pdata in pages.items():
-                        imageinfo = pdata.get("imageinfo", [])
-                        if imageinfo:
-                            media_url = imageinfo[0].get("url")
-                            if media_url and media_url.endswith(('.webm', '.mp4', '.ogv')):
-                                used_hashes.add(title)
-                                return media_url
-    except Exception:
-        pass
-    return None
-
-def search_internet_archive_video(query: str, used_hashes: set) -> str:
-    """Tìm video tài liệu thảm họa trên Archive.org qua API mở"""
-    api_url = "https://archive.org/advancedsearch.php"
-    params = {
-        "q": f"{query} AND mediatype:(movies)",
-        "fl[]": "identifier",
-        "rows": "6",
-        "page": "1",
-        "output": "json"
-    }
-    headers = {"User-Agent": "Mozilla/5.0"}
-    try:
-        r = requests.get(api_url, params=params, headers=headers, timeout=8)
-        if r.ok:
-            docs = r.json().get("response", {}).get("docs", [])
-            for doc in docs:
-                ident = doc.get("identifier")
-                if ident and ident not in used_hashes:
-                    meta_url = f"https://archive.org/metadata/{ident}"
-                    meta_r = requests.get(meta_url, headers=headers, timeout=8)
-                    if meta_r.ok:
-                        files = meta_r.json().get("files", [])
-                        for f in files:
-                            name = f.get("name", "")
-                            if name.endswith(".mp4") and "512kb" not in name:
-                                used_hashes.add(ident)
-                                return f"https://archive.org/download/{ident}/{name}"
-    except Exception:
-        pass
-    return None
+    random.shuffle(INVIDIOUS_INSTANCES)
+    
+    for instance in INVIDIOUS_INSTANCES:
+        try:
+            search_api = f"{instance}/api/v1/search?q={urllib.parse.quote(query)}&type=video&sort_by=relevance"
+            r = requests.get(search_api, headers=headers, timeout=5)
+            if r.ok:
+                items = r.json()
+                for item in items:
+                    v_id = item.get("videoId")
+                    dur = item.get("lengthSeconds", 0)
+                    if v_id and v_id not in used_hashes and 15 <= dur <= 600:
+                        # Lấy format video stream
+                        vid_api = f"{instance}/api/v1/videos/{v_id}"
+                        vr = requests.get(vid_api, headers=headers, timeout=5)
+                        if vr.ok:
+                            v_data = vr.json()
+                            formats = v_data.get("formatStreams", [])
+                            # Chọn format có sẵn cả hình lẫn tiếng (thường là 360p hoặc 720p container MP4)
+                            target_stream = next((f["url"] for f in formats if f.get("container") == "mp4" and f.get("resolution") in ["720p", "480p", "360p"]), None)
+                            if not target_stream and formats:
+                                target_stream = formats[0].get("url")
+                            if target_stream:
+                                used_hashes.add(v_id)
+                                return target_stream, dur
+        except Exception:
+            continue
+    return None, 0
 
 def fetch_stock_clip(query: str, p_key: str, pb_key: str, used_hashes: set, dest_path: str) -> bool:
-    """Chỉ dùng cho Động vật & Siêu xe"""
     headers = {"Authorization": p_key.strip()} if p_key else {}
     if p_key:
-        for page in [1, 2]:
-            try:
-                url = f"{PEXELS_VIDEO_URL}?query={urllib.parse.quote(query)}&per_page=12&page={page}"
-                r = requests.get(url, headers=headers, timeout=8)
-                if r.ok and r.json().get("videos"):
-                    for v in r.json()["videos"]:
-                        v_id = f"pexels_{v.get('id')}"
-                        if v_id not in used_hashes:
-                            files = v.get("video_files", [])
-                            hd = next((f["link"] for f in files if f.get("quality") == "hd" and f.get("file_type") == "video/mp4"), None)
-                            if not hd and files:
-                                hd = files[0].get("link")
-                            if hd and download_file_safe(hd, dest_path):
+        try:
+            url = f"{PEXELS_VIDEO_URL}?query={urllib.parse.quote(query)}&per_page=10&page=1"
+            r = requests.get(url, headers=headers, timeout=5)
+            if r.ok and r.json().get("videos"):
+                for v in r.json()["videos"]:
+                    v_id = f"pexels_{v.get('id')}"
+                    if v_id not in used_hashes:
+                        files = v.get("video_files", [])
+                        hd = next((f["link"] for f in files if f.get("quality") == "hd" and f.get("file_type") == "video/mp4"), None)
+                        if not hd and files:
+                            hd = files[0].get("link")
+                        if hd:
+                            # Tải nhanh
+                            with requests.get(hd, headers=headers, stream=True, timeout=8) as resp:
+                                if resp.status_code == 200:
+                                    with open(dest_path, "wb") as f:
+                                        for chunk in resp.iter_content(chunk_size=32768):
+                                            f.write(chunk)
+                            if os.path.exists(dest_path) and os.path.getsize(dest_path) > 15000:
                                 used_hashes.add(v_id)
                                 return True
-            except Exception:
-                continue
-
-    if pb_key:
-        try:
-            url = f"{PIXABAY_VIDEO_URL}?key={pb_key.strip()}&q={urllib.parse.quote(query)}&per_page=12"
-            r = requests.get(url, timeout=8)
-            if r.ok and r.json().get("hits"):
-                for v in r.json()["hits"]:
-                    v_id = f"pixabay_{v.get('id')}"
-                    if v_id not in used_hashes:
-                        target = v.get("videos", {}).get("large") or v.get("videos", {}).get("medium")
-                        if target and target.get("url") and download_file_safe(target["url"], dest_path):
-                            used_hashes.add(v_id)
-                            return True
         except Exception:
             pass
     return False
 
-def get_broll_smart_routed(engine_mode: str, query: str, fallback_q: str, p_key: str, pb_key: str, used_hashes: set, dest_path: str) -> bool:
-    if engine_mode == "open_archive_disaster":
-        # Tuyệt đối không dùng Pexels cho máy bay/tàu thảm họa
-        v_url = search_wikimedia_commons_video(query, used_hashes)
-        if not v_url:
-            v_url = search_internet_archive_video(query, used_hashes)
-        if not v_url:
-            v_url = search_wikimedia_commons_video(fallback_q, used_hashes)
-        if not v_url:
-            v_url = search_internet_archive_video(fallback_q, used_hashes)
-        if v_url and download_file_safe(v_url, dest_path):
-            return True
-        # Backup trường hợp rớt mạng: clip bão biển mở
-        backup_url = "https://upload.wikimedia.org/wikipedia/commons/transcoded/8/87/Rough_seas_aboard_the_RRS_James_Clark_Ross.webm/Rough_seas_aboard_the_RRS_James_Clark_Ross.webm.720p.vp9.webm"
-        return download_file_safe(backup_url, dest_path)
-
-    # Động vật & Siêu xe: Dùng Pexels / Pixabay
-    ok = fetch_stock_clip(query, p_key, pb_key, used_hashes, dest_path)
-    if not ok:
-        ok = fetch_stock_clip(fallback_q, p_key, pb_key, used_hashes, dest_path)
-    return ok
-
 # ==============================================================================
-# HÀM XỬ LÝ ÂM THANH & RENDER 5.0S
+# HÀM XỬ LÝ ÂM THANH & RENDER PHÂN ĐOẠN 5.0S
 # ==============================================================================
 
 async def generate_voice(text: str, out_audio: str, voice_option: str):
@@ -313,28 +219,29 @@ async def generate_voice(text: str, out_audio: str, voice_option: str):
     comm = edge_tts.Communicate(text, voice=v_code, rate="+4%")
     await comm.save(out_audio)
 
-def render_scene_safe(raw_v: str, voice_mp3: str, cat_tag: str, query_text: str, out_p: str, is_port: bool, raw_vol_float: float, workdir: str, idx: int):
+def cut_stream_and_render_5s(stream_url_or_file: str, total_dur: float, voice_mp3: str, out_p: str, is_port: bool, raw_vol_float: float, workdir: str, idx: int):
+    """
+    Kéo trực tiếp 5.0 giây từ luồng URL hoặc file:
+    - Đọc tuần tự qua HTTP stream bằng FFmpeg (chỉ tốn vài trăm KB băng thông).
+    - Giữ nguyên luồng âm thanh gốc của YouTube (tiếng sóng biển, va chạm, gió rít).
+    - Chuẩn hóa WAV 44.1kHz Stereo chống hoàn toàn lỗi 254.
+    """
     res_f = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30" if is_port else "scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,fps=30"
 
-    cmd_dur = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", raw_v]
-    try:
-        raw_dur = float(subprocess.run(cmd_dur, capture_output=True, text=True).stdout.strip() or 10.0)
-    except Exception:
-        raw_dur = 10.0
-
-    start_sec = 0.5
-    if raw_dur > (CLIP_DURATION + 2.0):
-        start_sec = random.uniform(0.5, min(5.0, raw_dur - CLIP_DURATION - 0.5))
+    # Lấy điểm cắt từ 20% đến 60% thời lượng video để bốc đúng đoạn cao trào
+    start_sec = 2.0
+    if total_dur > (CLIP_DURATION + 4.0):
+        start_sec = random.uniform(total_dur * 0.15, min(total_dur * 0.6, total_dur - CLIP_DURATION - 1.0))
 
     temp_v = os.path.join(workdir, f"tmp_v_{idx:03d}.mp4")
     norm_env_wav = os.path.join(workdir, f"tmp_env_{idx:03d}.wav")
     norm_voice_wav = os.path.join(workdir, f"tmp_voice_{idx:03d}.wav")
 
-    # 1. Cắt hình ảnh độc lập (bỏ hoàn toàn cờ audio)
+    # 1. Cắt video hình ảnh từ Stream URL
     subprocess.run([
         FFMPEG_EXE, "-y",
-        "-i", raw_v,
         "-ss", f"{start_sec:.2f}",
+        "-i", stream_url_or_file,
         "-t", f"{CLIP_DURATION:.3f}",
         "-vf", res_f,
         "-an",
@@ -342,49 +249,29 @@ def render_scene_safe(raw_v: str, voice_mp3: str, cat_tag: str, query_text: str,
         temp_v
     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
-    # 2. Xử lý âm thanh hiện trường
-    has_audio = check_video_has_audio(raw_v)
-    if has_audio:
+    # 2. Cắt âm thanh hiện trường gốc từ Stream URL (chuẩn hóa sang WAV 44.1kHz Stereo)
+    cmd_audio = [
+        FFMPEG_EXE, "-y",
+        "-ss", f"{start_sec:.2f}",
+        "-i", stream_url_or_file,
+        "-t", f"{CLIP_DURATION:.3f}",
+        "-ar", "44100", "-ac", "2",
+        norm_env_wav
+    ]
+    res_a = subprocess.run(cmd_audio, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    # Nếu luồng không có audio, bù tiếng động cơ / bão nhẹ
+    if res_a.returncode != 0 or not os.path.exists(norm_env_wav) or os.path.getsize(norm_env_wav) < 5000:
         subprocess.run([
             FFMPEG_EXE, "-y",
-            "-i", raw_v,
-            "-ss", f"{start_sec:.2f}",
+            "-f", "lavfi", "-i", "anoisesrc=d=5:c=brown:r=44100:a=0.35",
+            "-af", "lowpass=f=1200,tremolo=f=1.0:d=0.7",
             "-t", f"{CLIP_DURATION:.3f}",
             "-ar", "44100", "-ac", "2",
             norm_env_wav
         ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-    else:
-        if cat_tag == "disaster":
-            sfx_url = SFX_ASSETS["airplane"] if any(w in query_text.lower() for w in ["plane", "jet", "air", "cockpit"]) else SFX_ASSETS["ship"]
-        elif cat_tag == "animal":
-            sfx_url = SFX_ASSETS["nature"]
-        else:
-            sfx_url = SFX_ASSETS["car"]
 
-        sfx_cache = os.path.join(workdir, f"sfx_{idx:03d}.mp3")
-        download_file_safe(sfx_url, sfx_cache)
-
-        if os.path.exists(sfx_cache) and os.path.getsize(sfx_cache) > 10000:
-            subprocess.run([
-                FFMPEG_EXE, "-y",
-                "-i", sfx_cache,
-                "-ss", f"{(idx * 3) % 15}",
-                "-t", f"{CLIP_DURATION:.3f}",
-                "-af", "bass=g=5:f=110,volume=1.2",
-                "-ar", "44100", "-ac", "2",
-                norm_env_wav
-            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-        else:
-            subprocess.run([
-                FFMPEG_EXE, "-y",
-                "-f", "lavfi", "-i", "anoisesrc=d=5:c=brown:r=44100:a=0.35",
-                "-af", "lowpass=f=1100,tremolo=f=1.0:d=0.7",
-                "-t", f"{CLIP_DURATION:.3f}",
-                "-ar", "44100", "-ac", "2",
-                norm_env_wav
-            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-
-    # 3. Chuẩn hóa voice đọc sang WAV 44.1kHz stereo
+    # 3. Chuẩn hóa voice đọc
     subprocess.run([
         FFMPEG_EXE, "-y",
         "-i", voice_mp3,
@@ -393,7 +280,7 @@ def render_scene_safe(raw_v: str, voice_mp3: str, cat_tag: str, query_text: str,
         norm_voice_wav
     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
-    # 4. Hòa âm
+    # 4. Hòa âm tiếng hiện trường rõ nét + voice đọc
     subprocess.run([
         FFMPEG_EXE, "-y",
         "-i", temp_v,
@@ -416,9 +303,9 @@ def render_scene_safe(raw_v: str, voice_mp3: str, cat_tag: str, query_text: str,
 # ==============================================================================
 # PIPELINE SẢN XUẤT CHÍNH
 # ==============================================================================
-if st.button("🚀 Bắt Đầu Sản Xuất Master Pro Max", use_container_width=True, type="primary"):
-    status = st.status(f"Hệ thống đang sản xuất {calc_clips} phân cảnh...", expanded=True)
-    workdir = tempfile.mkdtemp(prefix="master_routed_")
+if st.button("🚀 Bắt Đầu Sản Xuất Video Thật 100%", use_container_width=True, type="primary"):
+    status = st.status(f"Hệ thống đang khởi động pipeline cào dữ liệu...", expanded=True)
+    workdir = tempfile.mkdtemp(prefix="master_yt_invidious_")
     used_hashes = set()
     is_port = "portrait" in orientation_opt
     is_en = "Tiếng Anh" in voice_choice
@@ -428,31 +315,26 @@ if st.button("🚀 Bắt Đầu Sản Xuất Master Pro Max", use_container_widt
     try:
         client = Groq(api_key=groq_key.strip())
 
-        # 1. AI phân tích kịch bản
-        status.update(label=f"🧠 1/4: {LLM_MODEL} đang xây dựng kịch bản...")
-        pool = cat_config["search_pool"]
+        # 1. AI biên soạn kịch bản
+        status.update(label=f"🧠 1/4: {LLM_MODEL} đang xây dựng câu chuyện kịch tính...")
         engine_mode = cat_config["engine"]
-        cat_tag = "disaster" if "disaster" in engine_mode else ("animal" if "Động vật" in selected_cat_name else "car")
+        pool = cat_config["search_pool"]
 
-        prompt = f"""You are a professional documentary video director.
+        prompt = f"""You are a professional documentary video director for viral channels like 'Seconds Before Disaster'.
 Category: "{selected_cat_name}".
 User prompt: "{topic_text}".
 Total scenes: Exactly {calc_clips} scenes (5.0s each).
 Language: {"English" if is_en else "Vietnamese"}.
 
-STRICT DYNAMIC SEARCH RULES:
-- If the topic mentions multiple objects (e.g. airplanes and ships), ALTERNATE between them!
-- Scene 1: An intense airplane event (e.g. airplane emergency landing, cockpit turbulence).
-- Scene 2: A violent maritime event (e.g. rough sea storm wave ship, boat extreme waves).
-- Scene 3: High-tension angle (e.g. cockpit alarm, huge ocean storm).
-- `query_en`: 2-3 specific English words for documentary archive search.
-- `fallback_en`: 2 simple backup words.
-- `speech_text`: One dramatic sentence under 12 words (~3.2 seconds).
+STRICT RULES:
+- Alternate subjects if multiple exist (e.g. plane landing vs cargo ship storm).
+- `query_en`: 3-4 specific search keywords for real footage on YouTube (e.g., 'airplane emergency landing caught on camera', 'cargo ship massive storm waves rough sea', 'airplane crosswind landing extreme').
+- `speech_text`: One dramatic narrative sentence under 12 words (~3.2 seconds).
 
 Return ONLY a JSON list of {calc_clips} objects:
 [
-  {{"scene": 1, "speech_text": "...", "query_en": "airplane emergency landing", "fallback_en": "aircraft storm"}},
-  {{"scene": 2, "speech_text": "...", "query_en": "rough seas ship wave crash", "fallback_en": "ship storm"}}
+  {{"scene": 1, "speech_text": "...", "query_en": "airplane emergency landing caught on camera"}},
+  {{"scene": 2, "speech_text": "...", "query_en": "cargo ship massive waves rough sea storm"}}
 ]"""
 
         resp = client.chat.completions.create(
@@ -466,52 +348,58 @@ Return ONLY a JSON list of {calc_clips} objects:
 
         while len(parsed_scenes) < calc_clips:
             idx = len(parsed_scenes)
-            pick = pool[idx % len(pool)]
+            q_val = pool[idx % len(pool)] if isinstance(pool[0], str) else pool[idx % len(pool)][0]
             parsed_scenes.append({
                 "scene": idx + 1,
-                "speech_text": f"Tình huống nguy cấp căng thẳng ở phân cảnh {idx + 1}.",
-                "query_en": pick[0],
-                "fallback_en": pick[1]
+                "speech_text": f"Tình huống nguy cấp diễn biến dữ dội ở phân cảnh {idx + 1}.",
+                "query_en": q_val
             })
         parsed_scenes = parsed_scenes[:calc_clips]
 
         # 2. Tạo Voice
-        status.update(label="🎙️ 2/4: Đang tạo giọng đọc thuyết minh...")
+        status.update(label="🎙️ 2/4: Đang tạo giọng đọc thuyết minh kịch tính...")
         scenes = []
         for idx, item in enumerate(parsed_scenes):
             v_file = os.path.join(workdir, f"v_{idx:03d}.mp3")
             asyncio.run(generate_voice(item["speech_text"], v_file, voice_choice))
             scenes.append({
                 "query": item["query_en"],
-                "fallback": item.get("fallback_en", item["query_en"]),
                 "audio": v_file
             })
 
-        # 3. Tải B-roll và render từng cảnh
-        status.update(label=f"🎬 3/4: Đang trích xuất B-roll từ ({engine_mode})...")
+        # 3. Tải Footage & Render 5.0s
         clips_txt = os.path.join(workdir, "clips.txt")
 
         with open(clips_txt, "w", encoding="utf-8") as f_cl:
             for idx, sc in enumerate(scenes):
-                raw_v = os.path.join(workdir, f"r_{idx:03d}.mp4")
+                status.update(label=f"🎬 3/4: Đang cào YouTube và xử lý phân cảnh {idx+1}/{calc_clips}...")
                 scene_v = os.path.join(workdir, f"scene_{idx:03d}.mp4")
 
-                ok = get_broll_smart_routed(engine_mode, sc["query"], sc["fallback"], pexels_key, pixabay_key, used_hashes, raw_v)
-                if not ok:
-                    fallback_base = pool[idx % len(pool)][0]
-                    get_broll_smart_routed(engine_mode, fallback_base, fallback_base, pexels_key, pixabay_key, used_hashes, raw_v)
+                if engine_mode == "youtube_invidious":
+                    stream_url, dur = search_youtube_invidious_stream(sc["query"], used_hashes)
+                    if not stream_url:
+                        # Thử từ khóa backup
+                        backup_query = pool[idx % len(pool)]
+                        stream_url, dur = search_youtube_invidious_stream(backup_query, used_hashes)
 
-                render_scene_safe(raw_v, sc["audio"], cat_tag, sc["query"], scene_v, is_port, raw_vol_float, workdir, idx)
-
-                if os.path.exists(raw_v):
-                    os.remove(raw_v)
+                    if stream_url:
+                        cut_stream_and_render_5s(stream_url, dur, sc["audio"], scene_v, is_port, raw_vol_float, workdir, idx)
+                    else:
+                        # Dự phòng nhanh nếu toàn bộ gateway nghẽn mạng
+                        fallback_file = os.path.join(workdir, f"fallback_{idx:03d}.mp4")
+                        fetch_stock_clip("ocean storm waves", pexels_key, pixabay_key, used_hashes, fallback_file)
+                        cut_stream_and_render_5s(fallback_file, 15.0, sc["audio"], scene_v, is_port, raw_vol_float, workdir, idx)
+                else:
+                    stock_file = os.path.join(workdir, f"stock_{idx:03d}.mp4")
+                    fetch_stock_clip(sc["query"], pexels_key, pixabay_key, used_hashes, stock_file)
+                    cut_stream_and_render_5s(stock_file, 15.0, sc["audio"], scene_v, is_port, raw_vol_float, workdir, idx)
 
                 f_cl.write(f"file '{os.path.abspath(scene_v)}'\n")
 
         # 4. Nối cảnh & Ép hòa âm BGM
-        status.update(label="⚡ 4/4: Ghép Master và hoàn tất hòa âm...", state="running")
+        status.update(label="⚡ 4/4: Ghép Master và xuất bản video thành phẩm...", state="running")
         temp_merged = os.path.join(workdir, "temp_merged.mp4")
-        final_mp4 = os.path.join(workdir, "master_final_pro.mp4")
+        final_mp4 = os.path.join(workdir, "master_disaster_youtube.mp4")
 
         subprocess.run([
             FFMPEG_EXE, "-y", "-f", "concat", "-safe", "0",
@@ -520,7 +408,15 @@ Return ONLY a JSON list of {calc_clips} objects:
 
         bgm_raw = os.path.join(workdir, "bgm_raw.mp3")
         bgm_fitted = os.path.join(workdir, "bgm_fitted.wav")
-        has_bgm = download_file_safe(CINEMATIC_BGM_URL, bgm_raw)
+        
+        # Tải BGM
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r_bgm = requests.get(CINEMATIC_BGM_URL, headers=headers, timeout=10)
+        has_bgm = False
+        if r_bgm.ok:
+            with open(bgm_raw, "wb") as f:
+                f.write(r_bgm.content)
+            has_bgm = True
 
         if has_bgm and bgm_volume > 0:
             subprocess.run([
@@ -548,7 +444,7 @@ Return ONLY a JSON list of {calc_clips} objects:
         else:
             shutil.copy(temp_merged, final_mp4)
 
-        status.update(label=f"🎉 Hoàn thành video {calc_clips * 5} giây hoàn hảo!", state="complete")
+        status.update(label=f"🎉 Hoàn thành video {calc_clips * 5} giây chuẩn YouTube thực tế!", state="complete")
 
         with open(final_mp4, "rb") as out_f:
             v_bytes = out_f.read()
@@ -557,7 +453,7 @@ Return ONLY a JSON list of {calc_clips} objects:
         st.download_button(
             label=f"⬇️ Tải Video Hoàn Chỉnh ({calc_clips * 5} Giây)",
             data=v_bytes,
-            file_name=f"master_{calc_clips * 5}s_{int(time.time())}.mp4",
+            file_name=f"disaster_youtube_{calc_clips * 5}s_{int(time.time())}.mp4",
             mime="video/mp4",
             use_container_width=True
         )
