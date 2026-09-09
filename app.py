@@ -27,14 +27,15 @@ LLM_MODEL = "openai/gpt-oss-120b"
 PEXELS_VIDEO_URL = "https://api.pexels.com/videos/search"
 PIXABAY_VIDEO_URL = "https://pixabay.com/api/videos/"
 
-# Nhạc nền BGM chuẩn Wikimedia
+# Nhạc nền BGM chuẩn MP3
 CINEMATIC_BGM_URL = "https://upload.wikimedia.org/wikipedia/commons/4/4c/Scott_Buckley_-_Aurora.mp3"
 
-# Kho footage thực tế bão biển từ Internet Archive & Wikimedia (Trực tiếp, không chặn bot)
-DISASTER_REAL_VIDEOS = [
-    "https://upload.wikimedia.org/wikipedia/commons/transcoded/8/87/Rough_seas_aboard_the_RRS_James_Clark_Ross.webm/Rough_seas_aboard_the_RRS_James_Clark_Ross.webm.720p.vp9.webm",
-    "https://upload.wikimedia.org/wikipedia/commons/transcoded/a/a2/Wave_crashing_over_the_bow_of_a_ship.ogv/Wave_crashing_over_the_bow_of_a_ship.ogv.720p.webm"
-]
+# Thư viện âm thanh xung lực MP3 chuẩn (Tuyệt đối không dùng OGG để chống lỗi 254)
+SFX_ASSETS = {
+    "airplane": "https://upload.wikimedia.org/wikipedia/commons/transcoded/5/5a/Jet_flyby.ogg/Jet_flyby.ogg.mp3",
+    "ship": "https://upload.wikimedia.org/wikipedia/commons/transcoded/2/27/Thunderstorm_sound.ogg/Thunderstorm_sound.ogg.mp3",
+    "disaster": "https://upload.wikimedia.org/wikipedia/commons/transcoded/2/27/Thunderstorm_sound.ogg/Thunderstorm_sound.ogg.mp3"
+}
 
 try:
     groq_key = st.secrets["GROQ_API_KEY"]
@@ -44,56 +45,12 @@ except Exception:
     st.error("Chưa cấu hình API Key trong mục Secrets của Streamlit Cloud!")
     st.stop()
 
-st.title("🎬 Studio POV Master Pro Max")
-st.caption("Khắc phục hoàn toàn lỗi tải file giả • Tạo âm thanh môi trường nội bộ FFmpeg • Cắt ghép chuẩn ≤ 5.0s")
-
-CATEGORY_SETTINGS = {
-    "💥 Tổng hợp tai nạn, thảm họa, khoảnh khắc hiểm nghèo thực tế": {
-        "engine": "disaster_hybrid",
-        "search_pool": [
-            "cargo ship heavy storm waves",
-            "massive ocean storm wave crashing",
-            "rough sea dark waves hitting boat",
-            "fishing boat storm extreme weather",
-            "huge ocean wave splash rough sea"
-        ],
-        "default_voice_en": "Tiếng Anh: Guy (Nam thời sự / Thảm họa Seconds Before Disaster)",
-        "default_voice_vi": "Tiếng Việt: Nam Minh (Nam thời sự / Bản tin tài liệu)",
-        "prompt_tone": "Khẩn cấp, nghẹt thở, ngắn gọn, phong cách phóng sự Seconds Before Disaster"
-    },
-    "🐾 Thế giới Động vật / Thú cưng dễ thương": {
-        "engine": "stock_mode",
-        "search_pool": [
-            ("cute golden retriever puppy playing barking", "puppy dog"),
-            ("baby panda climbing bamboo", "baby panda"),
-            ("little kitten playing meowing", "kitten cat"),
-            ("fluffy bunny rabbit eating carrot", "cute bunny"),
-            ("playful sea otter floating water", "sea otter"),
-            ("cute duckling swimming pond", "duckling")
-        ],
-        "default_voice_en": "Tiếng Anh: Ana (Giọng hoạt hình / Vui tươi)",
-        "default_voice_vi": "Tiếng Việt: Hoài My (Nữ truyền cảm / Nhẹ nhàng)",
-        "prompt_tone": "Ngộ nghĩnh, tươi vui, mang lại cảm giác ấm áp và kỳ thú"
-    },
-    "🏎️ Siêu xe / Tốc độ / Đua đêm Tokyo": {
-        "engine": "stock_mode",
-        "search_pool": [
-            ("supercar drifting night city street loud exhaust", "drift car"),
-            ("sports car speeding highway exhaust sound", "sports car"),
-            ("neon cyberpunk race car launch control", "supercar night")
-        ],
-        "default_voice_en": "Tiếng Anh: Christopher (Trầm khàn / Cuốn hút)",
-        "default_voice_vi": "Tiếng Việt: Nam Minh (Nam thời sự / Bản tin tài liệu)",
-        "prompt_tone": "Đậm chất adrenaline, uy lực động cơ và ánh đèn thành phố"
-    }
-}
-
-selected_cat_name = st.selectbox("Chọn thể loại video chính:", list(CATEGORY_SETTINGS.keys()))
-cat_config = CATEGORY_SETTINGS[selected_cat_name]
+st.title("🎬 Studio POV Master Pro Max (Full Sound FX)")
+st.caption("Khớp chủ thể linh hoạt • Âm thanh xung lực chân thực • Cắt ghép chuẩn xác ≤ 5.0s")
 
 topic_text = st.text_area(
     "Mô tả chi tiết kịch bản / Tình huống:",
-    value="Những khoảnh khắc thót tim khi tàu cá vượt bão biển dữ dội, sóng thần 20 mét đánh vỡ kính buồng lái và tai nạn xảy ra trong gang tấc",
+    value="Các vụ tai nạn máy bay hạ cánh khẩn cấp trong bão, tàu lớn chao đảo giữa sóng thần",
     height=80
 )
 
@@ -102,11 +59,9 @@ with col1:
     voice_choice = st.selectbox(
         "Giọng đọc thuyết minh:",
         [
-            cat_config["default_voice_en"],
-            cat_config["default_voice_vi"],
             "Tiếng Anh: Guy (Nam thời sự / Thảm họa Seconds Before Disaster)",
-            "Tiếng Anh: Christopher (Trầm khàn / Cuốn hút)",
-            "Tiếng Anh: Ana (Giọng hoạt hình / Vui tươi)",
+            "Tiếng Anh: Christopher (Trầm khàn / Phim tài liệu)",
+            "Tiếng Anh: Ana (Giọng hoạt hình / Thiếu nhi)",
             "Tiếng Việt: Nam Minh (Nam thời sự / Bản tin tài liệu)",
             "Tiếng Việt: Hoài My (Nữ truyền cảm / Nhẹ nhàng)"
         ]
@@ -115,18 +70,18 @@ with col2:
     total_sec_input = st.number_input("Tổng thời lượng (giây):", min_value=10, max_value=120, value=20, step=5)
 
 calc_clips = math.ceil(total_sec_input / CLIP_DURATION)
-st.info(f"💡 Hệ thống sẽ cắt ghép **{calc_clips} phân cảnh thực tế (mỗi cảnh đúng 5.0 giây)**.")
+st.info(f"💡 Hệ thống sẽ chia kịch bản thành **{calc_clips} phân cảnh khác nhau** (mỗi cảnh đúng 5.0 giây).")
 
 col_opt1, col_opt2 = st.columns(2)
 with col_opt1:
     orientation_opt = st.selectbox("Khung hình xuất bản:", ["landscape (Ngang 16:9 YouTube Chuẩn)", "portrait (Dọc 9:16 Shorts/TikTok)"])
 with col_opt2:
-    raw_vol = st.slider("Âm lượng tiếng hiện trường (Sóng/Gió/Động cơ) (%):", min_value=40, max_value=180, value=110, step=10)
+    raw_vol = st.slider("Âm lượng tiếng hiện trường (Gió/Động cơ/Sóng) (%):", min_value=40, max_value=180, value=110, step=10)
 
 bgm_volume = st.slider("Âm lượng nhạc nền ngầm BGM (%):", min_value=0, max_value=40, value=15, step=5)
 
 # ==============================================================================
-# HÀM XỬ LÝ AN TOÀN
+# HÀM XỬ LÝ KỸ THUẬT AN TOÀN
 # ==============================================================================
 
 def download_file_safe(url: str, dest: str) -> bool:
@@ -137,7 +92,7 @@ def download_file_safe(url: str, dest: str) -> bool:
                 with open(dest, "wb") as f:
                     for chunk in r.iter_content(chunk_size=32768):
                         f.write(chunk)
-                return os.path.exists(dest) and os.path.getsize(dest) > 20000
+                return os.path.exists(dest) and os.path.getsize(dest) > 10000
     except Exception:
         pass
     return False
@@ -151,18 +106,6 @@ def check_video_has_audio(file_path: str) -> bool:
     try:
         res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
         return "audio" in res.stdout.strip()
-    except Exception:
-        return False
-
-def verify_valid_media(file_path: str) -> bool:
-    if not file_path or not os.path.exists(file_path):
-        return False
-    if os.path.getsize(file_path) < 50000:
-        return False
-    cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", file_path]
-    try:
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-        return float(res.stdout.strip() or 0) > 1.0
     except Exception:
         return False
 
@@ -181,82 +124,74 @@ async def generate_voice(text: str, out_audio: str, voice_option: str):
     comm = edge_tts.Communicate(text, voice=v_code, rate="+4%")
     await comm.save(out_audio)
 
-def fetch_from_pexels(query: str, p_key: str, used_hashes: set) -> str:
+def fetch_dynamic_pexels_clip(query: str, p_key: str, used_hashes: set) -> str:
     if not p_key:
         return None
     headers = {"Authorization": p_key.strip()}
-    for page in [1, 2, 3]:
-        try:
-            url = f"{PEXELS_VIDEO_URL}?query={urllib.parse.quote(query)}&per_page=12&page={page}"
-            r = requests.get(url, headers=headers, timeout=8)
-            if r.ok and r.json().get("videos"):
-                videos = r.json()["videos"]
-                random.shuffle(videos)
-                for v in videos:
-                    v_id = f"pexels_{v.get('id')}"
-                    if v_id not in used_hashes:
-                        files = v.get("video_files", [])
-                        hd = next((f["link"] for f in files if f.get("quality") == "hd" and f.get("file_type") == "video/mp4"), None)
-                        if not hd and files:
-                            hd = files[0].get("link")
-                        if hd:
-                            used_hashes.add(v_id)
-                            return hd
-        except Exception:
-            continue
+    queries_to_try = [query, f"{query} action", f"{query} storm"]
+    for q in queries_to_try:
+        for page in [1, 2, 3]:
+            try:
+                url = f"{PEXELS_VIDEO_URL}?query={urllib.parse.quote(q)}&per_page=12&page={page}"
+                r = requests.get(url, headers=headers, timeout=8)
+                if r.ok and r.json().get("videos"):
+                    videos = r.json()["videos"]
+                    random.shuffle(videos)
+                    for v in videos:
+                        v_id = f"pexels_{v.get('id')}"
+                        if v_id not in used_hashes:
+                            files = v.get("video_files", [])
+                            hd = next((f["link"] for f in files if f.get("quality") == "hd" and f.get("file_type") == "video/mp4"), None)
+                            if not hd and files:
+                                hd = files[0].get("link")
+                            if hd:
+                                used_hashes.add(v_id)
+                                return hd
+            except Exception:
+                continue
     return None
 
-def fetch_from_pixabay(query: str, pb_key: str, used_hashes: set) -> str:
+def fetch_dynamic_pixabay_clip(query: str, pb_key: str, used_hashes: set) -> str:
     if not pb_key:
         return None
-    try:
-        url = f"{PIXABAY_VIDEO_URL}?key={pb_key.strip()}&q={urllib.parse.quote(query)}&per_page=12"
-        r = requests.get(url, timeout=8)
-        if r.ok and r.json().get("hits"):
-            hits = r.json()["hits"]
-            random.shuffle(hits)
-            for v in hits:
-                v_id = f"pixabay_{v.get('id')}"
-                if v_id not in used_hashes:
-                    v_files = v.get("videos", {})
-                    target = v_files.get("large") or v_files.get("medium") or v_files.get("small")
-                    if target and target.get("url"):
-                        used_hashes.add(v_id)
-                        return target["url"]
-    except Exception:
-        pass
+    for page in [1, 2]:
+        try:
+            url = f"{PIXABAY_VIDEO_URL}?key={pb_key.strip()}&q={urllib.parse.quote(query)}&per_page=15&page={page}"
+            r = requests.get(url, timeout=8)
+            if r.ok and r.json().get("hits"):
+                hits = r.json()["hits"]
+                random.shuffle(hits)
+                for v in hits:
+                    v_id = f"pixabay_{v.get('id')}"
+                    if v_id not in used_hashes:
+                        v_files = v.get("videos", {})
+                        target = v_files.get("large") or v_files.get("medium") or v_files.get("small")
+                        if target and target.get("url"):
+                            used_hashes.add(v_id)
+                            return target["url"]
+        except Exception:
+            pass
     return None
 
-def get_broll_failproof(cat_mode: str, query: str, fallback_q: str, p_key: str, pb_key: str, used_hashes: set, raw_dest: str, clip_idx: int) -> bool:
-    if cat_mode == "disaster_hybrid":
-        direct_url = DISASTER_REAL_VIDEOS[clip_idx % len(DISASTER_REAL_VIDEOS)]
-        if download_file_safe(direct_url, raw_dest) and verify_valid_media(raw_dest):
-            return True
-
-        p_url = fetch_from_pexels(query, p_key, used_hashes) or fetch_from_pexels("storm waves ocean heavy", p_key, used_hashes)
-        if p_url and download_file_safe(p_url, raw_dest):
-            return True
-
-    url = fetch_from_pexels(query, p_key, used_hashes)
+def get_dynamic_clip(query: str, fallback_q: str, p_key: str, pb_key: str, used_hashes: set, dest_path: str) -> bool:
+    url = fetch_dynamic_pexels_clip(query, p_key, used_hashes)
     if not url and pb_key:
-        url = fetch_from_pixabay(query, pb_key, used_hashes)
-    if url and download_file_safe(url, raw_dest):
+        url = fetch_dynamic_pixabay_clip(query, pb_key, used_hashes)
+    if url and download_file_safe(url, dest_path):
         return True
 
-    url = fetch_from_pexels(fallback_q, p_key, used_hashes)
-    if url and download_file_safe(url, raw_dest):
+    url = fetch_dynamic_pexels_clip(fallback_q, p_key, used_hashes)
+    if not url and pb_key:
+        url = fetch_dynamic_pixabay_clip(fallback_q, pb_key, used_hashes)
+    if url and download_file_safe(url, dest_path):
         return True
 
-    return download_file_safe(DISASTER_REAL_VIDEOS[0], raw_dest)
+    generic_url = fetch_dynamic_pexels_clip("storm waves rough sea", p_key, used_hashes)
+    if generic_url:
+        return download_file_safe(generic_url, dest_path)
+    return False
 
-def cut_and_mix_5s_bulletproof(raw_v: str, voice_mp3: str, out_p: str, is_port: bool, raw_vol_float: float, workdir: str, idx: int):
-    """
-    Quy trình hòa âm an toàn tuyệt đối:
-    1. Cắt video hình ảnh độc lập.
-    2. Nếu video có audio gốc: Trích xuất và chuẩn hóa sang WAV 44.1kHz.
-       Nếu video câm: Sinh âm thanh gió bão/sóng gầm trực tiếp từ bộ lọc nội bộ của FFmpeg (anoisesrc).
-    3. Trộn voice và audio môi trường rồi đóng gói vào MP4.
-    """
+def render_scene_dynamic_sfx(raw_v: str, voice_mp3: str, subject_tag: str, out_p: str, is_port: bool, raw_vol_float: float, workdir: str, idx: int):
     res_f = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30" if is_port else "scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,fps=30"
 
     cmd_dur = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", raw_v]
@@ -273,7 +208,7 @@ def cut_and_mix_5s_bulletproof(raw_v: str, voice_mp3: str, out_p: str, is_port: 
     norm_env_wav = os.path.join(workdir, f"tmp_env_{idx:03d}.wav")
     norm_voice_wav = os.path.join(workdir, f"tmp_voice_{idx:03d}.wav")
 
-    # 1. Cắt hình ảnh
+    # 1. Cắt hình ảnh sạch sẽ (tách hoàn toàn audio)
     subprocess.run([
         FFMPEG_EXE, "-y",
         "-i", raw_v,
@@ -285,7 +220,7 @@ def cut_and_mix_5s_bulletproof(raw_v: str, voice_mp3: str, out_p: str, is_port: 
         temp_v
     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
-    # 2. Xử lý âm thanh môi trường nội bộ
+    # 2. Xử lý âm thanh hiện trường có xung lực
     has_audio = check_video_has_audio(raw_v)
     if has_audio:
         subprocess.run([
@@ -297,17 +232,36 @@ def cut_and_mix_5s_bulletproof(raw_v: str, voice_mp3: str, out_p: str, is_port: 
             norm_env_wav
         ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
     else:
-        # Tự tạo tiếng gió bão gầm rú chân thực từ bộ lọc nội tại anoisesrc của FFmpeg
-        subprocess.run([
-            FFMPEG_EXE, "-y",
-            "-f", "lavfi", "-i", "anoisesrc=d=5:c=brown:r=44100:a=0.35",
-            "-af", "lowpass=f=900,tremolo=f=0.5:d=0.7",
-            "-t", f"{CLIP_DURATION:.3f}",
-            "-ar", "44100", "-ac", "2",
-            norm_env_wav
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        # Tải asset âm thanh MP3 tương ứng với thể loại cảnh
+        sfx_type = "airplane" if any(w in subject_tag.lower() for w in ["plane", "jet", "flight", "air"]) else "ship"
+        sfx_url = SFX_ASSETS.get(sfx_type, SFX_ASSETS["disaster"])
+        sfx_file = os.path.join(workdir, f"sfx_cache_{sfx_type}.mp3")
 
-    # 3. Chuẩn hóa voice đọc
+        if not os.path.exists(sfx_file):
+            download_file_safe(sfx_url, sfx_file)
+
+        if os.path.exists(sfx_file) and os.path.getsize(sfx_file) > 10000:
+            subprocess.run([
+                FFMPEG_EXE, "-y",
+                "-i", sfx_file,
+                "-ss", f"{(idx * 3) % 15}",
+                "-t", f"{CLIP_DURATION:.3f}",
+                "-af", "bass=g=5:f=110,volume=1.2",
+                "-ar", "44100", "-ac", "2",
+                norm_env_wav
+            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        else:
+            # Fallback nếu mạng tải file lỗi
+            subprocess.run([
+                FFMPEG_EXE, "-y",
+                "-f", "lavfi", "-i", "anoisesrc=d=5:c=brown:r=44100:a=0.35",
+                "-af", "lowpass=f=1100,bass=g=7:f=100,tremolo=f=1.0:d=0.7",
+                "-t", f"{CLIP_DURATION:.3f}",
+                "-ar", "44100", "-ac", "2",
+                norm_env_wav
+            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+
+    # 3. Chuẩn hóa voice đọc sang WAV 44.1kHz stereo
     subprocess.run([
         FFMPEG_EXE, "-y",
         "-i", voice_mp3,
@@ -316,14 +270,14 @@ def cut_and_mix_5s_bulletproof(raw_v: str, voice_mp3: str, out_p: str, is_port: 
         norm_voice_wav
     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
-    # 4. Hòa âm tiếng hiện trường rõ nét + voice đọc
+    # 4. Hòa âm: Đẩy tiếng hiện trường rõ ràng + voice đọc
     subprocess.run([
         FFMPEG_EXE, "-y",
         "-i", temp_v,
         "-i", norm_env_wav,
         "-i", norm_voice_wav,
         "-filter_complex",
-        f"[1:a]volume={raw_vol_float:.2f},afade=t=in:ss=0:d=0.2,afade=t=out:st=4.8:d=0.2[a_env];[2:a]volume=1.0[a_voice];[a_env][a_voice]amix=inputs=2:duration=first:dropout_transition=0[aout]",
+        f"[1:a]volume={raw_vol_float:.2f},afade=t=in:ss=0:d=0.15,afade=t=out:st=4.8:d=0.2[a_env];[2:a]volume=1.0[a_voice];[a_env][a_voice]amix=inputs=2:duration=first:dropout_transition=0[aout]",
         "-map", "0:v:0",
         "-map", "[aout]",
         "-c:v", "copy",
@@ -339,9 +293,9 @@ def cut_and_mix_5s_bulletproof(raw_v: str, voice_mp3: str, out_p: str, is_port: 
 # ==============================================================================
 # PIPELINE SẢN XUẤT CHÍNH
 # ==============================================================================
-if st.button("🚀 Bắt Đầu Dựng Video Thực Tế Pro Max", use_container_width=True, type="primary"):
-    status = st.status(f"Hệ thống đang chuẩn bị sản xuất {calc_clips} phân cảnh...", expanded=True)
-    workdir = tempfile.mkdtemp(prefix="master_robust_")
+if st.button("🚀 Bắt Đầu Tạo Video Khớp Từ Khóa 100%", use_container_width=True, type="primary"):
+    status = st.status(f"Đang phân tích kịch bản và phân rã các đối tượng thị giác...", expanded=True)
+    workdir = tempfile.mkdtemp(prefix="master_dynamic_")
     used_hashes = set()
     is_port = "portrait" in orientation_opt
     is_en = "Tiếng Anh" in voice_choice
@@ -351,78 +305,85 @@ if st.button("🚀 Bắt Đầu Dựng Video Thực Tế Pro Max", use_container
     try:
         client = Groq(api_key=groq_key.strip())
 
-        # 1. AI biên soạn kịch bản
-        status.update(label=f"🧠 1/4: {LLM_MODEL} đang xây dựng câu chuyện...")
-        pool = cat_config["search_pool"]
-        engine_mode = cat_config["engine"]
-        parsed_scenes = []
-
-        BATCH_SIZE = 6
-        total_batches = math.ceil(calc_clips / BATCH_SIZE)
-
-        for b in range(total_batches):
-            needed = min(BATCH_SIZE, calc_clips - len(parsed_scenes))
-            prompt = f"""You are a professional documentary scriptwriter for viral channels like 'Seconds Before Disaster'.
-Topic: "{topic_text}".
-Genre tone: {cat_config["prompt_tone"]}.
+        # 1. AI phân rã từ khóa độc lập cho TỪNG CẢNH
+        status.update(label=f"🧠 1/4: {LLM_MODEL} đang phân bổ đa dạng các đối tượng...")
+        prompt = f"""You are a professional documentary video director for viral channels like 'Seconds Before Disaster'.
+User topic: "{topic_text}".
+Total scenes needed: Exactly {calc_clips} scenes (each scene is 5.0 seconds).
 Language: {"English" if is_en else "Vietnamese"}.
-Task: Write {needed} consecutive narrative sentences describing the unfolding disaster or intense event.
-Requirements:
-- Urgent, realistic, documentary tone.
-- Under 12 words per sentence (must speak in ~3.2 seconds).
 
-Return ONLY a JSON array with exactly {needed} strings. Example:
-["First sentence here.", "Second sentence here."]"""
+STRICT VISUAL VARIETY RULES:
+- If the topic mentions multiple subjects (e.g., airplanes and ships), ALTERNATE between them!
+- Scene 1: An airplane in emergency / rough landing / turbulence.
+- Scene 2: A large ship or fishing boat battling huge ocean storm waves.
+- Scene 3: Cockpit or ship deck tension.
+- Do NOT repeat the same visual query for all scenes!
+- `query_en`: 2-3 specific English words (e.g., 'airplane rough landing', 'cargo ship storm waves', 'jet cockpit turbulence').
+- `fallback_en`: 2 backup words (e.g., 'airplane storm', 'ship waves').
+- `subject_type`: Either 'airplane' or 'ship' or 'disaster'.
+- `speech_text`: One dramatic narrative sentence under 12 words (~3.2 seconds).
 
-            resp = client.chat.completions.create(
-                model=LLM_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3
-            )
-            raw_text = resp.choices[0].message.content.strip()
-            match = re.search(r'\[.*\]', raw_text, re.DOTALL)
-            batch_lines = []
-            if match:
-                try:
-                    batch_lines = json.loads(match.group(0))
-                except Exception:
-                    pass
+Return ONLY a valid JSON list of {calc_clips} objects:
+[
+  {{
+    "scene": 1,
+    "speech_text": "...",
+    "query_en": "airplane storm landing",
+    "fallback_en": "airplane emergency",
+    "subject_type": "airplane"
+  }},
+  {{
+    "scene": 2,
+    "speech_text": "...",
+    "query_en": "cargo ship heavy storm waves",
+    "fallback_en": "ship rough sea",
+    "subject_type": "ship"
+  }}
+]"""
 
-            if not batch_lines:
-                batch_lines = [f"Khoảnh khắc thót tim khi tình huống nguy cấp xảy ra ở phân cảnh {len(parsed_scenes) + i + 1}." for i in range(needed)]
+        resp = client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.4
+        )
+        raw_text = resp.choices[0].message.content.strip()
+        match = re.search(r'\[.*\]', raw_text, re.DOTALL)
+        parsed_scenes = json.loads(match.group(0)) if match else []
 
-            for line in batch_lines:
-                idx = len(parsed_scenes)
-                if engine_mode == "disaster_hybrid":
-                    q_val = pool[idx % len(pool)]
-                    fb_val = "ocean storm heavy rough waves"
-                else:
-                    item_pool = pool[idx % len(pool)]
-                    q_val = item_pool[0]
-                    fb_val = item_pool[1]
-
-                parsed_scenes.append({
-                    "speech_text": str(line).strip(),
-                    "query": q_val,
-                    "fallback": fb_val
-                })
-                if len(parsed_scenes) >= calc_clips:
-                    break
+        # Dự phòng tự động nếu AI trả thiếu cảnh
+        default_alternatives = [
+            ("airplane rough landing crosswind", "airplane storm", "airplane", "A passenger jet battles dangerous crosswinds during emergency touchdown."),
+            ("cargo ship huge storm waves crash", "ship rough sea", "ship", "Massive forty-foot waves slam into the hull of a struggling freighter."),
+            ("cockpit pilots flight turbulence", "airplane cockpit", "airplane", "Inside the cockpit, pilots fight to regain altitude and control."),
+            ("fishing boat extreme rough sea", "boat ocean waves", "ship", "Freezing arctic water floods the deck of an isolated fishing vessel.")
+        ]
+        while len(parsed_scenes) < calc_clips:
+            idx = len(parsed_scenes)
+            pick = default_alternatives[idx % len(default_alternatives)]
+            parsed_scenes.append({
+                "scene": idx + 1,
+                "speech_text": pick[3] if is_en else f"Tình huống hiểm nguy khẩn cấp tiếp diễn ở phân cảnh thứ {idx + 1}.",
+                "query_en": pick[0],
+                "fallback_en": pick[1],
+                "subject_type": pick[2]
+            })
+        parsed_scenes = parsed_scenes[:calc_clips]
 
         # 2. Tạo Voice
-        status.update(label="🎙️ 2/4: Tạo giọng đọc thuyết minh chuyên nghiệp...")
+        status.update(label="🎙️ 2/4: Đang tạo giọng đọc thuyết minh kịch tính...")
         scenes = []
         for idx, item in enumerate(parsed_scenes):
             v_file = os.path.join(workdir, f"v_{idx:03d}.mp3")
             asyncio.run(generate_voice(item["speech_text"], v_file, voice_choice))
             scenes.append({
-                "query": item["query"],
-                "fallback": item["fallback"],
+                "query": item["query_en"],
+                "fallback": item["fallback_en"],
+                "subject_type": item.get("subject_type", "disaster"),
                 "audio": v_file
             })
 
-        # 3. Tải B-roll và xử lý âm thanh từng cảnh
-        status.update(label="🎬 3/4: Đang trích xuất video thực tế & hòa âm hiện trường...")
+        # 3. Tải B-roll linh hoạt theo từng cảnh
+        status.update(label="🎬 3/4: Đang cào video đa dạng (máy bay, tàu lớn, buồng lái)...")
         clips_txt = os.path.join(workdir, "clips.txt")
 
         with open(clips_txt, "w", encoding="utf-8") as f_cl:
@@ -430,19 +391,21 @@ Return ONLY a JSON array with exactly {needed} strings. Example:
                 raw_v = os.path.join(workdir, f"r_{idx:03d}.mp4")
                 scene_v = os.path.join(workdir, f"scene_{idx:03d}.mp4")
 
-                get_broll_failproof(engine_mode, sc["query"], sc["fallback"], pexels_key, pixabay_key, used_hashes, raw_v, idx)
+                ok = get_dynamic_clip(sc["query"], sc["fallback"], pexels_key, pixabay_key, used_hashes, raw_v)
+                if not ok:
+                    get_dynamic_clip("storm waves rough ocean", "storm ocean", pexels_key, pixabay_key, used_hashes, raw_v)
 
-                cut_and_mix_5s_bulletproof(raw_v, sc["audio"], scene_v, is_port, raw_vol_float, workdir, idx)
+                render_scene_dynamic_sfx(raw_v, sc["audio"], sc["subject_type"], scene_v, is_port, raw_vol_float, workdir, idx)
 
                 if os.path.exists(raw_v):
                     os.remove(raw_v)
 
                 f_cl.write(f"file '{os.path.abspath(scene_v)}'\n")
 
-        # 4. Nối cảnh & Ép hòa âm BGM ngầm
-        status.update(label="⚡ 4/4: Ghép Master và hoàn tất hòa âm...", state="running")
+        # 4. Nối cảnh & Hòa âm BGM
+        status.update(label="⚡ 4/4: Ghép nối Master thành phẩm...", state="running")
         temp_merged = os.path.join(workdir, "temp_merged.mp4")
-        final_mp4 = os.path.join(workdir, "master_disaster_promax.mp4")
+        final_mp4 = os.path.join(workdir, "master_disaster_dynamic.mp4")
 
         subprocess.run([
             FFMPEG_EXE, "-y", "-f", "concat", "-safe", "0",
@@ -488,7 +451,7 @@ Return ONLY a JSON array with exactly {needed} strings. Example:
         st.download_button(
             label=f"⬇️ Tải Video Hoàn Chỉnh ({calc_clips * 5} Giây)",
             data=v_bytes,
-            file_name=f"disaster_master_{calc_clips * 5}s_{int(time.time())}.mp4",
+            file_name=f"disaster_dynamic_{calc_clips * 5}s_{int(time.time())}.mp4",
             mime="video/mp4",
             use_container_width=True
         )
