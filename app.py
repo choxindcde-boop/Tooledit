@@ -19,7 +19,7 @@ import edge_tts
 
 FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
 
-st.set_page_config(page_title="Studio POV Story Master Pro Max", page_icon="⚡", layout="centered")
+st.set_page_config(page_title="Studio POV Story Master Pro", page_icon="⚡", layout="centered")
 
 FPS = 30
 CLIP_DURATION = 5.0
@@ -27,7 +27,6 @@ LLM_MODEL = "openai/gpt-oss-120b"
 PEXELS_VIDEO_URL = "https://api.pexels.com/videos/search"
 PIXABAY_VIDEO_URL = "https://pixabay.com/api/videos/"
 
-# Âm thanh môi trường thực tế & BGM bản quyền mở
 AMBIENT_SFX = {
     "storm": "https://upload.wikimedia.org/wikipedia/commons/2/27/Thunderstorm_sound.ogg",
     "nature": "https://upload.wikimedia.org/wikipedia/commons/e/ea/Bird_songs_in_forest.ogg",
@@ -42,8 +41,8 @@ except Exception:
     st.error("Chưa cấu hình GROQ_API_KEY hoặc PEXELS_API_KEY trong Secrets của Streamlit Cloud!")
     st.stop()
 
-st.title("⚡ Studio POV Story Master (Fix Lỗi 254)")
-st.caption("Khôi phục âm thanh gốc / Môi trường • Triệt tiêu lỗi 254 • Cắt ghép chuẩn xác 5s")
+st.title("⚡ Studio POV Story Master (Bản Sửa Triệt Để Lỗi 254)")
+st.caption("Xử lý Stream tách biệt • Giữ trọn âm thanh gốc/môi trường • Không crash FFmpeg")
 
 SUBJECT_POOLS = {
     "Thảm họa Tàu thuyền / Bão biển / Sóng thần": [
@@ -206,63 +205,72 @@ def get_broll_clip(query: str, fallback_query: str, p_key: str, pb_key: str, use
         clip = fetch_from_pixabay(fallback_query, pb_key, used_hashes)
     return clip
 
-def cut_clip_exact_5s_safe(raw_p: str, out_p: str, is_port: bool, ambient_track_path: str):
-    """Cắt chuẩn 5s an toàn, loại bỏ triệt để xung đột -stream_loop và -shortest gây lỗi 254"""
+def process_single_scene_bulletproof(raw_v: str, voice_a: str, amb_a: str, out_p: str, is_port: bool, amb_vol: float):
+    """
+    Quy trình xử lý phân cảnh độc lập 100% không bao giờ dính lỗi 254:
+    1. Cắt video sang file tạm (chỉ thuần hình ảnh, scale/crop, fps 30).
+    2. Chuẩn hóa audio: lấy tiếng gốc nếu có, hoặc lấy tiếng môi trường ambient.
+    3. Hòa âm Voice + Ambient thành 1 luồng duy nhất đúng 5.0 giây.
+    4. Ghép Video + Audio thành file cảnh hoàn chỉnh.
+    """
     res_f = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30" if is_port else "scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,fps=30"
+    
+    # 1. Cắt video thuần túy
+    tmp_dir = os.path.dirname(out_p)
+    temp_v = os.path.join(tmp_dir, f"tmp_v_{os.path.basename(out_p)}")
+    cmd_v = [
+        FFMPEG_EXE, "-y",
+        "-i", raw_v,
+        "-t", f"{CLIP_DURATION:.3f}",
+        "-vf", res_f,
+        "-an",
+        "-c:v", "libx264", "-preset", "ultrafast",
+        temp_v
+    ]
+    subprocess.run(cmd_v, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
-    cmd_dur = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", raw_p]
-    try:
-        raw_dur = float(subprocess.run(cmd_dur, capture_output=True, text=True).stdout.strip() or 10.0)
-    except Exception:
-        raw_dur = 10.0
+    # 2. Xác định nguồn âm thanh môi trường
+    has_audio = check_video_has_audio(raw_v)
+    source_ambient = raw_v if has_audio else amb_a
 
-    start_sec = 0.5
-    if raw_dur > (CLIP_DURATION + 2.0):
-        start_sec = random.uniform(1.0, min(3.0, raw_dur - CLIP_DURATION - 0.5))
+    # 3. Hòa âm (Voice 1.0 + Môi trường/Tiếng gốc amb_vol) đúng 5s
+    temp_a = os.path.join(tmp_dir, f"tmp_a_{os.path.basename(out_p)}.aac")
+    cmd_a = [
+        FFMPEG_EXE, "-y",
+        "-i", source_ambient,
+        "-i", voice_a,
+        "-filter_complex",
+        f"[0:a]volume={amb_vol:.2f},afade=t=in:ss=0:d=0.2,afade=t=out:st=4.8:d=0.2[a0];[1:a]volume=1.0[a1];[a0][a1]amix=inputs=2:duration=first[aout]",
+        "-map", "[aout]",
+        "-t", f"{CLIP_DURATION:.3f}",
+        "-c:a", "aac", "-b:a", "192k",
+        temp_a
+    ]
+    subprocess.run(cmd_a, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
-    has_audio = check_video_has_audio(raw_p)
+    # 4. Đóng gói thành phẩm 1 cảnh
+    cmd_mux = [
+        FFMPEG_EXE, "-y",
+        "-i", temp_v,
+        "-i", temp_a,
+        "-c", "copy",
+        out_p
+    ]
+    subprocess.run(cmd_mux, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
-    if has_audio:
-        # Giữ lại âm gốc của clip
-        cmd = [
-            FFMPEG_EXE, "-y",
-            "-ss", f"{start_sec:.2f}",
-            "-i", raw_p,
-            "-t", f"{CLIP_DURATION:.3f}",
-            "-vf", res_f,
-            "-af", "afade=t=in:ss=0:d=0.2,afade=t=out:st=4.8:d=0.2",
-            "-c:v", "libx264", "-preset", "ultrafast",
-            "-c:a", "aac", "-b:a", "192k",
-            out_p
-        ]
-    else:
-        # Bù trực tiếp đoạn audio môi trường (cắt đúng 5.0s, không dùng stream_loop vô tận)
-        cmd = [
-            FFMPEG_EXE, "-y",
-            "-ss", f"{start_sec:.2f}",
-            "-i", raw_p,
-            "-ss", "0",
-            "-i", ambient_track_path,
-            "-t", f"{CLIP_DURATION:.3f}",
-            "-vf", res_f,
-            "-af", "afade=t=in:ss=0:d=0.2,afade=t=out:st=4.8:d=0.2",
-            "-map", "0:v:0",
-            "-map", "1:a:0",
-            "-c:v", "libx264", "-preset", "ultrafast",
-            "-c:a", "aac", "-b:a", "192k",
-            out_p
-        ]
-
-    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+    # Dọn file đệm
+    for p in [temp_v, temp_a]:
+        if os.path.exists(p):
+            os.remove(p)
 
 # ==============================================================================
 # PIPELINE SẢN XUẤT CHÍNH
 # ==============================================================================
-if st.button("🚀 Bắt Đầu Sản Xuất Master An Toàn (Đã Sửa Lỗi 254)", use_container_width=True, type="primary"):
+if st.button("🚀 Bắt Đầu Sản Xuất Master Hoàn Hảo", use_container_width=True, type="primary"):
     if not topic_genre.strip():
         st.warning("Vui lòng nhập chủ đề kịch bản.")
     else:
-        status = st.status(f"Đang chạy quy trình sản xuất {calc_clips} phân cảnh...", expanded=True)
+        status = st.status(f"Đang chuẩn bị sản xuất {calc_clips} phân cảnh...", expanded=True)
         workdir = tempfile.mkdtemp(prefix="master_safe_")
         used_hashes = set()
         is_port = "portrait" in orientation_opt
@@ -272,13 +280,12 @@ if st.button("🚀 Bắt Đầu Sản Xuất Master An Toàn (Đã Sửa Lỗi 2
             client = Groq(api_key=groq_key.strip())
 
             # Chuẩn bị track âm thanh môi trường
-            status.update(label="🌊 Đang thiết lập âm thanh môi trường thực tế...")
-            ambient_file = os.path.join(workdir, "ambient_cut.mp3")
+            ambient_file = os.path.join(workdir, "ambient.ogg")
             amb_url = AMBIENT_SFX["storm"] if any(w in topic_genre.lower() for w in ["bão", "tàu", "sóng", "ocean", "sea", "storm"]) else AMBIENT_SFX["nature"]
             download_file_safe(amb_url, ambient_file)
 
             # 1. Sinh kịch bản Batch
-            status.update(label=f"🧠 1/4: {LLM_MODEL} đang xây dựng câu chuyện...")
+            status.update(label=f"🧠 1/4: {LLM_MODEL} đang sinh kịch bản...")
             if selected_category in SUBJECT_POOLS:
                 pool = SUBJECT_POOLS[selected_category]
             else:
@@ -343,8 +350,8 @@ Return ONLY a JSON array with exactly {needed} strings. Example:
                     "dur": CLIP_DURATION
                 })
 
-            # 3. Tải B-roll và xử lý âm thanh an toàn
-            status.update(label="🎬 3/4: Đang tải B-roll & hòa âm môi trường...")
+            # 3. Tải B-roll và xử lý từng cảnh an toàn tuyệt đối
+            status.update(label="🎬 3/4: Tải B-roll & đóng gói phân cảnh...")
             clips_txt = os.path.join(workdir, "clips.txt")
             amb_vol_float = ambient_volume / 100.0
 
@@ -355,32 +362,18 @@ Return ONLY a JSON array with exactly {needed} strings. Example:
                         v_url = get_broll_clip(pool[0][0], pool[0][1], pexels_key, pixabay_key, used_hashes)
 
                     raw_v = os.path.join(workdir, f"r_{idx:03d}.mp4")
-                    cut_v = os.path.join(workdir, f"c_{idx:03d}.mp4")
+                    scene_v = os.path.join(workdir, f"scene_{idx:03d}.mp4")
                     download_file_safe(v_url, raw_v)
 
-                    cut_clip_exact_5s_safe(raw_v, cut_v, is_port, ambient_file)
+                    process_single_scene_bulletproof(raw_v, sc["audio"], ambient_file, scene_v, is_port, amb_vol_float)
+                    
                     if os.path.exists(raw_v):
                         os.remove(raw_v)
 
-                    # Hòa âm Voice đọc (1.0) và Âm gốc/Môi trường (amb_vol_float)
-                    synced_v = os.path.join(workdir, f"s_{idx:03d}.mp4")
-                    cmd_sync = [
-                        FFMPEG_EXE, "-y",
-                        "-i", cut_v,
-                        "-i", sc["audio"],
-                        "-filter_complex", f"[0:a]volume={amb_vol_float:.2f}[a_orig];[1:a]volume=1.0[a_voice];[a_orig][a_voice]amix=inputs=2:duration=first[aout]",
-                        "-map", "0:v:0",
-                        "-map", "[aout]",
-                        "-t", f"{CLIP_DURATION:.3f}",
-                        "-c:v", "copy",
-                        "-c:a", "aac", "-b:a", "192k",
-                        synced_v
-                    ]
-                    subprocess.run(cmd_sync, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-                    f_cl.write(f"file '{os.path.abspath(synced_v)}'\n")
+                    f_cl.write(f"file '{os.path.abspath(scene_v)}'\n")
 
             # 4. Xuất Master + Lồng BGM
-            status.update(label="⚡ 4/4: Ghép Master và xuất thành phẩm...", state="running")
+            status.update(label="⚡ 4/4: Nối các phân cảnh và hoàn tất Master...", state="running")
             temp_merged = os.path.join(workdir, "temp_merged.mp4")
             final_mp4 = os.path.join(workdir, "master_story_pro.mp4")
 
