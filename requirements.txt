@@ -1,8 +1,6 @@
-streamlit
-requests
-imageio-ffmpeg
-groq
-edge-tts
-yt-dlp>=2026.8.0
-Pillow>=10.0.0
-
+streamlit==1.28.0
+yt-dlp==2023.11.16
+opencv-python-headless==4.8.1.78
+numpy==1.24.3
+pillow==10.1.0
+requests==2.31.0
