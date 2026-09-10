@@ -1,7 +1,5 @@
 streamlit
 yt-dlp
-opencv-python-headless
-pillow
-requests
-numpy
 groq
+gtts
+requests
