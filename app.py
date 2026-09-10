@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+Xem bản này chất k . # -*- coding: utf-8 -*-
 import os
 import re
 import json
@@ -19,7 +19,7 @@ from groq import Groq
 import edge_tts
 
 # ==============================================================================
-# CẤU HÌNH & KHỞI TẠO
+# CẤU HÌNH
 # ==============================================================================
 FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
 FFPROBE_EXE = shutil.which("ffprobe") or "ffprobe"
@@ -27,16 +27,29 @@ FFPROBE_EXE = shutil.which("ffprobe") or "ffprobe"
 st.set_page_config(page_title="Cute Animals POV Studio Pro", page_icon="🐾", layout="centered")
 
 FPS = 30
-CLIP_DURATION = 5.0
-LLM_MODEL = "openai/gpt-oss-120b"
+MIN_SCENE_DUR = 2.5
+MAX_SCENE_DUR = 10.0
+VOICE_PAD = 0.55
 PEXELS_VIDEO_URL = "https://api.pexels.com/videos/search"
 PIXABAY_VIDEO_URL = "https://pixabay.com/api/videos/"
 FREESOUND_SEARCH_URL = "https://freesound.org/apiv2/search/text/"
 CUTE_BGM_URL = "https://upload.wikimedia.org/wikipedia/commons/4/4c/Scott_Buckley_-_Aurora.mp3"
 
 VOICE_GAIN = 1.00
-ORIGINAL_GAIN = 0.35
+ORIGINAL_GAIN = 0.30
 SFX_GAIN = 0.40
+TIMESCALE = 15360
+
+# Danh sách model theo ảnh Groq Console của bạn
+LLM_MODEL_OPTIONS = [
+    ("openai/gpt-oss-120b",         "⭐ GPT-OSS 120B — Mạnh nhất, JSON chuẩn (khuyên dùng)"),
+    ("llama-3.3-70b-versatile",     "Llama 3.3 70B Versatile — Đa năng, ổn định"),
+    ("openai/gpt-oss-20b",          "GPT-OSS 20B — Nhẹ & nhanh hơn"),
+    ("qwen/qwen3-32b",              "Qwen 3 32B — Thay thế tốt"),
+    ("groq/compound",               "Groq Compound — Có tool/web"),
+    ("groq/compound-mini",          "Groq Compound Mini — Nhẹ"),
+    ("llama-3.1-8b-instant",        "Llama 3.1 8B Instant — Siêu nhanh"),
+]
 
 if "global_used_ids" not in st.session_state:
     st.session_state.global_used_ids = set()
@@ -53,11 +66,19 @@ except Exception:
     st.stop()
 
 st.title("🐾 Cute Animals POV Studio Pro")
-st.caption("AI phân tích hành vi thú cưng • B-roll không trùng lặp • Hòa âm tiếng kêu thực tế + Voice + BGM")
+st.caption("Pipeline B-roll trước → AI đọc query thực tế → viết voice khớp hình → ghép master")
 
 # ==============================================================================
-# GIAO DIỆN ĐIỀU KHIỂN
+# GIAO DIỆN
 # ==============================================================================
+model_labels = [m[1] for m in LLM_MODEL_OPTIONS]
+model_label_map = {m[1]: m[0] for m in LLM_MODEL_OPTIONS}
+selected_model_label = st.selectbox(
+    "🧠 Model AI (Groq):", model_labels, index=0,
+    help="Chọn model sinh query B-roll & viết narration"
+)
+LLM_MODEL = model_label_map[selected_model_label]
+
 topic_genre = st.text_area(
     "Nhập chủ đề về loài động vật muốn làm video:",
     value="Những chú mèo con và cún con tinh nghịch vui đùa đuổi bắt trong khu vườn đầy hoa nắng",
@@ -76,10 +97,10 @@ with col_t1:
         ]
     )
 with col_t2:
-    total_sec_input = st.number_input("Tổng thời lượng (giây):", min_value=10, max_value=300, value=25, step=5)
+    total_sec_input = st.number_input("Tổng thời lượng mục tiêu (giây):", min_value=10, max_value=300, value=25, step=5)
 
-calc_clips = math.ceil(total_sec_input / CLIP_DURATION)
-st.info(f"💡 Hệ thống sẽ sản xuất **{calc_clips} phân cảnh** × {CLIP_DURATION}s = **{calc_clips * CLIP_DURATION:.0f}s**.")
+approx_clips = max(3, math.ceil(total_sec_input / 4.5))
+st.info(f"💡 Sẽ tải ~**{approx_clips} clip B-roll**, AI viết narration khớp hình, mỗi cảnh dài theo voice thực (2.5–10s).")
 
 col_v1, col_v2 = st.columns(2)
 with col_v1:
@@ -106,17 +127,17 @@ with col_a2:
     keep_original_audio = st.checkbox("Giữ tiếng kêu gốc từ video tải về", value=True)
 
 # ==============================================================================
-# HÀM XỬ LÝ KỸ THUẬT & TRÁNH CRASH
+# HELPERS
 # ==============================================================================
-def download_file_safe(url: str, dest: str) -> bool:
+def download_file_safe(url: str, dest: str, min_size: int = 10000) -> bool:
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     try:
-        with requests.get(url, headers=headers, stream=True, timeout=20) as r:
+        with requests.get(url, headers=headers, stream=True, timeout=25) as r:
             if r.status_code == 200:
                 with open(dest, "wb") as f:
                     for chunk in r.iter_content(chunk_size=16384):
                         f.write(chunk)
-                return os.path.exists(dest) and os.path.getsize(dest) > 10000
+                return os.path.exists(dest) and os.path.getsize(dest) > min_size
     except Exception:
         pass
     return False
@@ -131,6 +152,18 @@ def has_audio_stream(filepath: str) -> bool:
         return "audio" in r.stdout.strip()
     except Exception:
         return False
+
+def get_media_duration(path: str, default: float = 3.0) -> float:
+    try:
+        r = subprocess.run(
+            [FFPROBE_EXE, "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", path],
+            capture_output=True, text=True, timeout=8
+        )
+        val = float((r.stdout or "").strip() or default)
+        return val if val > 0 else default
+    except Exception:
+        return default
 
 def video_content_hash(filepath: str, num_frames: int = 6) -> str:
     hasher = hashlib.md5()
@@ -147,69 +180,84 @@ def video_content_hash(filepath: str, num_frames: int = 6) -> str:
         hasher.update(str(random.random()).encode())
     return hasher.hexdigest()
 
-def get_video_duration(path: str) -> float:
-    try:
-        r = subprocess.run(
-            [FFPROBE_EXE, "-v", "error", "-show_entries", "format=duration",
-             "-of", "default=noprint_wrappers=1:nokey=1", path],
-            capture_output=True, text=True, timeout=8
-        )
-        return float(r.stdout.strip() or 10.0)
-    except Exception:
-        return 10.0
-
-async def generate_voice(text: str, out_audio: str, voice_option: str):
+async def _generate_voice_async(text: str, out_audio: str, voice_option: str):
     if "Ana" in voice_option:
-        v_code, rate = "en-US-AnaNeural", "+2%"
+        v_code, rate = "en-US-AnaNeural", "+3%"
     elif "Christopher" in voice_option:
         v_code, rate = "en-US-ChristopherNeural", "+0%"
     elif "Guy" in voice_option:
         v_code, rate = "en-US-GuyNeural", "+2%"
     elif "Hoài My" in voice_option:
-        v_code, rate = "vi-VN-HoaiMyNeural", "+2%"
+        v_code, rate = "vi-VN-HoaiMyNeural", "+4%"
     else:
-        v_code, rate = "vi-VN-NamMinhNeural", "+2%"
+        v_code, rate = "vi-VN-NamMinhNeural", "+4%"
     comm = edge_tts.Communicate(text, voice=v_code, rate=rate)
     await comm.save(out_audio)
 
-# ==============================================================================
-# AI GENERATION: ĐỘC QUYỀN ĐỘNG VẬT & JSON OBJECT AN TOÀN
-# ==============================================================================
-def ai_generate_animal_queries(client, topic: str, focus_mode: str, n_queries: int):
-    prompt = f"""You are a professional wildlife and cute pet documentary footage researcher.
-Topic: "{topic}".
-Animal Focus: "{focus_mode}".
+def generate_voice(text: str, out_audio: str, voice_option: str):
+    asyncio.run(_generate_voice_async(text, out_audio, voice_option))
 
-TASK: Generate exactly {n_queries} UNIQUE, distinct visual queries for searching stock video clips of cute animals on Pexels/Pixabay.
+def _safe_json_call(client, model, prompt, temperature=0.6, max_retries=2):
+    """Gọi LLM trả về JSON, có fallback nếu model không hỗ trợ response_format."""
+    for attempt in range(max_retries):
+        try:
+            resp = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=temperature,
+                response_format={"type": "json_object"}
+            )
+            return json.loads(resp.choices[0].message.content.strip())
+        except Exception:
+            try:
+                resp = client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": "You return ONLY valid JSON, no markdown fences."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=temperature,
+                )
+                txt = resp.choices[0].message.content.strip()
+                txt = re.sub(r"^```(?:json)?\s*|\s*```$", "", txt, flags=re.MULTILINE)
+                return json.loads(txt)
+            except Exception:
+                if attempt == max_retries - 1:
+                    raise
+                time.sleep(1.0)
+    return {}
+
+# ==============================================================================
+# AI CALL #1: SINH QUERY B-ROLL (chưa có narration)
+# ==============================================================================
+def ai_generate_broll_queries(client, model, topic: str, focus_mode: str, n_queries: int):
+    prompt = f"""You are a professional cute-pet & wildlife stock footage researcher.
+Topic: "{topic}"
+Animal focus: "{focus_mode}"
+
+TASK: Generate EXACTLY {n_queries} DIVERSE stock-video search queries.
+These will be used to download cute animal clips from Pexels/Pixabay.
 
 RULES:
-- Focus 100% on CUTE ANIMALS (cats, kittens, dogs, puppies, pandas, otters, bunnies, ducklings).
-- Strictly AVOID landscape-only words like "forest", "empty meadow", "sunset", "autumn leaves".
-- Each query must have specific actions: "eating bamboo", "playing with ball", "running happily", "close up big eyes", "sleeping curled up".
-- Provide `fallback` (2 simple words identifying the animal).
-- Provide `sfx` (sound keyword: "kitten meow", "puppy bark", "duck quack", "cat purr").
+- 100% focus on CUTE ANIMALS (kittens, puppies, pandas, otters, bunnies, ducklings, hamsters).
+- Each query = English, VERY specific: animal + action + setting. Example: "golden retriever puppy running grass sunset".
+- Each query must be DIFFERENT from all others (different action, angle, or setting).
+- Strictly AVOID landscape-only terms like "forest", "empty meadow", "autumn leaves".
+- Provide `fallback` = 2-3 simple words identifying the animal.
+- Provide `sfx` = short English sound keyword matching the animal ("kitten meow", "puppy bark", "duck quack").
 
-RETURN ONLY A VALID JSON OBJECT WITH A "queries" KEY:
+Return ONLY valid JSON:
 {{
   "queries": [
-    {{"query": "cute kitten playing with ball", "fallback": "cute kitten", "sfx": "kitten meow"}},
-    {{"query": "golden retriever puppy running grass", "fallback": "cute puppy", "sfx": "puppy barking"}},
-    {{"query": "baby panda eating bamboo close up", "fallback": "baby panda", "sfx": "animal eating"}}
+    {{"query": "...", "fallback": "...", "sfx": "..."}},
+    ...
   ]
 }}"""
-
     try:
-        resp = client.chat.completions.create(
-            model=LLM_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
-            response_format={"type": "json_object"}
-        )
-        data = json.loads(resp.choices[0].message.content.strip())
-        query_list = data.get("queries", [])
-
+        data = _safe_json_call(client, model, prompt, temperature=0.7)
+        raw = data.get("queries", [])
         cleaned = []
-        for item in query_list:
+        for item in raw:
             if not isinstance(item, dict):
                 continue
             q = str(item.get("query", "")).strip()
@@ -217,27 +265,96 @@ RETURN ONLY A VALID JSON OBJECT WITH A "queries" KEY:
             sfx = str(item.get("sfx", "")).strip() or "cute animal sound"
             if q:
                 cleaned.append({"query": q, "fallback": fb, "sfx": sfx})
-        if cleaned:
-            return cleaned
+        if len(cleaned) >= 3:
+            return cleaned[:n_queries]
     except Exception:
         pass
 
-    fallback_defaults = [
+    defaults = [
         {"query": "cute kitten close up eyes", "fallback": "kitten cat", "sfx": "kitten meow"},
-        {"query": "playful puppy dog running", "fallback": "cute puppy", "sfx": "puppy barking"},
-        {"query": "baby panda playing bamboo", "fallback": "baby panda", "sfx": "panda sound"},
+        {"query": "playful puppy dog running grass", "fallback": "cute puppy", "sfx": "puppy barking"},
+        {"query": "baby panda eating bamboo", "fallback": "baby panda", "sfx": "panda sound"},
         {"query": "fluffy bunny rabbit eating grass", "fallback": "cute bunny", "sfx": "rabbit eating"},
-        {"query": "cute sea otter swimming water", "fallback": "sea otter", "sfx": "water splash"}
+        {"query": "cute sea otter swimming water", "fallback": "sea otter", "sfx": "water splash"},
+        {"query": "ducklings walking together pond", "fallback": "ducklings", "sfx": "duck quack"},
+        {"query": "hamster eating sunflower seed close up", "fallback": "hamster", "sfx": "hamster squeak"},
     ]
-    return fallback_defaults
+    while len(defaults) < n_queries:
+        defaults = defaults + defaults
+    return defaults[:n_queries]
 
 # ==============================================================================
-# CÀO B-ROLL & ÂM THANH SFX
+# AI CALL #2: VIẾT NARRATION CHO CÁC CLIP ĐÃ TẢI THỰC TẾ
+# ==============================================================================
+def ai_write_narration_for_clips(client, model, topic: str, clip_queries: list, lang: str):
+    """
+    clip_queries: list[{"query": "...", "fallback": "..."}] — ground truth của hình ảnh
+    Trả về: list[{"speech": "...", "sfx": "..."}]
+    """
+    clip_list_txt = "\n".join(
+        f'Scene {i+1}: VISUAL = "{c["query"]}"  (subject: {c["fallback"]})'
+        for i, c in enumerate(clip_queries)
+    )
+
+    prompt = f"""You are a warm, charming pet documentary narrator.
+Topic: "{topic}"
+Narration language: {lang}
+Total scenes: {len(clip_queries)}
+
+Here is the EXACT visual content ALREADY edited into the video (in order). DO NOT change it, only describe it:
+{clip_list_txt}
+
+TASK: Write narration so that the SPEECH of each scene MATCHES its visual content above.
+Also make ONE small continuous story: scene 1 = meet, middle = play/explore, end = cozy/rest.
+Scene N must flow naturally into scene N+1.
+
+STRICT RULES:
+- The speech of scene N MUST refer to what is VISIBLE in scene N (based on the visual above).
+- Do NOT invent visuals that are not in the list.
+- Each speech: MAX 9 words, warm & adorable, ~2.5-4 seconds of speaking.
+- Each SFX: short English keyword matching the animal sound (e.g. "kitten meow", "puppy barking").
+- All speeches must be in {lang}.
+
+Return ONLY valid JSON:
+{{
+  "scenes": [
+    {{"speech": "...", "sfx": "..."}},
+    ...
+  ]
+}}"""
+
+    try:
+        data = _safe_json_call(client, model, prompt, temperature=0.5)
+        raw = data.get("scenes", [])
+        cleaned = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            sp = str(item.get("speech", "")).strip()
+            sfx = str(item.get("sfx", "")).strip() or "cute animal sound"
+            if sp:
+                cleaned.append({"speech": sp, "sfx": sfx})
+
+        # Bù nếu thiếu
+        while len(cleaned) < len(clip_queries):
+            cleaned.append({
+                "speech": f"Look at this little friend, scene {len(cleaned)+1}.",
+                "sfx": "cute animal sound"
+            })
+        return cleaned[:len(clip_queries)]
+    except Exception:
+        # Fallback: speech generic cho từng scene
+        return [
+            {"speech": f"So cute! Little friend number {i+1}.", "sfx": "cute animal sound"}
+            for i in range(len(clip_queries))
+        ]
+
+# ==============================================================================
+# CÀO B-ROLL & SFX
 # ==============================================================================
 def fetch_from_pexels(query: str, p_key: str, used_ids: set):
     headers = {"Authorization": p_key.strip()}
-    pages = [random.randint(1, 4), random.randint(1, 2)]
-    for page in pages:
+    for page in [random.randint(1, 4), random.randint(1, 2)]:
         try:
             url = f"{PEXELS_VIDEO_URL}?query={urllib.parse.quote(query)}&per_page=15&page={page}"
             r = requests.get(url, headers=headers, timeout=8)
@@ -285,8 +402,7 @@ def fetch_from_pixabay(query: str, pb_key: str, used_ids: set):
 
 def get_broll_clip(scene_query: dict, p_key: str, pb_key: str, used_ids: set):
     q = scene_query["query"]
-    fb = scene_query["fallback"]
-
+    fb = scene_query.get("fallback", "cute animal")
     for attempt in [q, f"cute {fb}", fb]:
         url = fetch_from_pexels(attempt, p_key, used_ids)
         if url:
@@ -314,66 +430,86 @@ def fetch_animal_sfx(sfx_query: str, f_key: str, dest: str) -> bool:
             random.shuffle(results)
             for s in results:
                 preview = s.get("previews", {}).get("preview-hq-mp3")
-                if preview and download_file_safe(preview, dest):
+                if preview and download_file_safe(preview, dest, min_size=3000):
                     return True
     except Exception:
         pass
     return False
 
 # ==============================================================================
-# QUY TRÌNH DỰNG CẢNH 5s & HÒA ÂM CHUẨN XÁC
+# VIDEO: CẮT / LOOP ĐÚNG DURATION ĐỘNG
 # ==============================================================================
-def cut_clip_exact_5s(raw_p: str, out_p: str, is_port: bool, keep_audio: bool):
+def cut_clip_to_duration(raw_p: str, out_p: str, duration: float, is_port: bool, keep_audio: bool) -> bool:
     res_f = (
-        "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30"
+        "scale=1080:1920:force_original_aspect_ratio=increase,"
+        "crop=1080:1920,setsar=1,fps=30"
         if is_port else
-        "scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,fps=30"
+        "scale=1280:720:force_original_aspect_ratio=increase,"
+        "crop=1280:720,setsar=1,fps=30"
     )
-    raw_dur = get_video_duration(raw_p)
-    start_sec = 0.5
-    if raw_dur > (CLIP_DURATION + 2.0):
-        start_sec = random.uniform(1.0, min(3.5, raw_dur - CLIP_DURATION - 0.5))
+    raw_dur = get_media_duration(raw_p, default=10.0)
 
-    base_cmd = [
-        FFMPEG_EXE, "-y",
-        "-ss", f"{start_sec:.2f}",
-        "-i", raw_p,
-        "-t", f"{CLIP_DURATION:.3f}",
-        "-vf", res_f
-    ]
+    if raw_dur < duration + 0.6:
+        cmd = [
+            FFMPEG_EXE, "-y",
+            "-stream_loop", "-1",
+            "-i", raw_p,
+            "-t", f"{duration:.3f}",
+            "-vf", res_f,
+        ]
+    else:
+        start_sec = random.uniform(0.3, max(0.4, raw_dur - duration - 0.4))
+        cmd = [
+            FFMPEG_EXE, "-y",
+            "-ss", f"{start_sec:.2f}",
+            "-i", raw_p,
+            "-t", f"{duration:.3f}",
+            "-vf", res_f,
+        ]
 
-    has_audio = has_audio_stream(raw_p)
-    if keep_audio and has_audio:
-        base_cmd += [
+    src_has_audio = has_audio_stream(raw_p)
+    if keep_audio and src_has_audio:
+        fade_out = max(0.1, duration - 0.35)
+        cmd += [
             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "22",
+            "-pix_fmt", "yuv420p", "-video_track_timescale", str(TIMESCALE),
             "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
-            "-af", "afade=t=in:d=0.2,afade=t=out:st=4.8:d=0.2",
+            "-af", f"afade=t=in:d=0.15,afade=t=out:st={fade_out:.2f}:d=0.35",
             out_p
         ]
     else:
-        base_cmd += ["-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "22", out_p]
-
-    subprocess.run(base_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        cmd += [
+            "-an",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "22",
+            "-pix_fmt", "yuv420p", "-video_track_timescale", str(TIMESCALE),
+            out_p
+        ]
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
     return has_audio_stream(out_p) if keep_audio else False
 
-def build_scene_audio(voice_path: str, orig_clip: str, sfx_path: str, out_audio: str):
+# ==============================================================================
+# MIX AUDIO SCENE (DURATION ĐỘNG)
+# ==============================================================================
+def build_scene_audio(voice_path: str, orig_clip: str, sfx_path: str, out_audio: str, scene_duration: float):
     inputs = ["-i", voice_path]
-    filters = [f"[0:a]volume={VOICE_GAIN},apad=pad_dur={CLIP_DURATION}[v]"]
+    filters = [f"[0:a]aresample=44100,volume={VOICE_GAIN},apad=pad_dur={scene_duration:.3f}[v]"]
     amix_inputs = ["[v]"]
     idx = 1
 
     if orig_clip and os.path.exists(orig_clip) and has_audio_stream(orig_clip):
         inputs += ["-i", orig_clip]
-        filters.append(f"[{idx}:a]volume={ORIGINAL_GAIN},apad=pad_dur={CLIP_DURATION}[o]")
+        filters.append(
+            f"[{idx}:a]aresample=44100,volume={ORIGINAL_GAIN},"
+            f"apad=pad_dur={scene_duration:.3f}[o]"
+        )
         amix_inputs.append("[o]")
         idx += 1
 
     if sfx_path and os.path.exists(sfx_path):
         inputs += ["-i", sfx_path]
         filters.append(
-            f"[{idx}:a]volume={SFX_GAIN},adelay=200|200,"
-            f"afade=t=in:d=0.2,afade=t=out:st=4.6:d=0.4,"
-            f"apad=pad_dur={CLIP_DURATION}[s]"
+            f"[{idx}:a]aresample=44100,volume={SFX_GAIN},adelay=200|200,"
+            f"afade=t=in:d=0.15,apad=pad_dur={scene_duration:.3f}[s]"
         )
         amix_inputs.append("[s]")
         idx += 1
@@ -381,32 +517,30 @@ def build_scene_audio(voice_path: str, orig_clip: str, sfx_path: str, out_audio:
     filter_complex = (
         ";".join(filters) + ";" +
         "".join(amix_inputs) +
-        f"amix=inputs={len(amix_inputs)}:duration=first:dropout_transition=0,"
-        f"atrim=0:{CLIP_DURATION},loudnorm=I=-16:TP=-1.5:LRA=11[aout]"
+        f"amix=inputs={len(amix_inputs)}:duration=longest:dropout_transition=0,"
+        f"atrim=0:{scene_duration:.3f},asetpts=N/SR/TB,"
+        f"loudnorm=I=-16:TP=-1.5:LRA=11[aout]"
     )
-
-    cmd = [
-        FFMPEG_EXE, "-y"
-    ] + inputs + [
+    cmd = [FFMPEG_EXE, "-y"] + inputs + [
         "-filter_complex", filter_complex,
         "-map", "[aout]",
-        "-c:a", "aac", "-b:a", "192k", "-ar", "44100",
+        "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
         out_audio
     ]
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
 # ==============================================================================
-# PIPELINE SẢN XUẤT CHÍNH
+# PIPELINE v3: B-roll TRƯỚC → VOICE SAU
 # ==============================================================================
 if st.button("🚀 Bắt Đầu Tạo Video Động Vật Dễ Thương", use_container_width=True, type="primary"):
     if not topic_genre.strip():
         st.warning("Vui lòng nhập chủ đề động vật.")
     else:
-        status = st.status(f"Đang tiến hành dựng video {calc_clips} phân cảnh...", expanded=True)
+        status = st.status(f"Khởi động với model: {LLM_MODEL}", expanded=True)
         workdir = tempfile.mkdtemp(prefix="cute_animals_")
         is_port = "portrait" in orientation_opt
         is_en = "Tiếng Anh" in voice_choice
-        total_duration_video = calc_clips * CLIP_DURATION
+        lang = "English" if is_en else "Vietnamese"
 
         used_ids = st.session_state.global_used_ids
         used_content = st.session_state.global_used_content
@@ -414,102 +548,117 @@ if st.button("🚀 Bắt Đầu Tạo Video Động Vật Dễ Thương", use_co
         try:
             client = Groq(api_key=groq_key.strip())
 
-            # 1. AI sinh kịch bản câu chuyện & Query B-roll chuyên biệt
-            status.update(label="🧠 1/5: AI phân tích hành vi đáng yêu & sinh query B-roll...")
-            n_queries_needed = max(calc_clips * 2, 10)
-            dynamic_queries = ai_generate_animal_queries(client, topic_genre.strip(), animal_focus, n_queries_needed)
-            random.shuffle(dynamic_queries)
+            # ============================
+            # 1. AI SINH QUERY B-ROLL
+            # ============================
+            status.update(label=f"🧠 1/6: AI sinh {approx_clips} query B-roll (model: {LLM_MODEL.split('/')[-1]})...")
+            queries = ai_generate_broll_queries(client, LLM_MODEL, topic_genre.strip(), animal_focus, approx_clips)
+            status.update(label=f"🧠 1/6: Đã có {len(queries)} query B-roll. Bắt đầu tải...")
 
-            # AI viết kịch bản dẫn chuyện từng cảnh
-            BATCH_SIZE = 6
-            total_batches = math.ceil(calc_clips / BATCH_SIZE)
-            parsed_lines = []
-
-            for _ in range(total_batches):
-                needed = min(BATCH_SIZE, calc_clips - len(parsed_lines))
-                lang = "English" if is_en else "Vietnamese"
-                prompt = f"""You are a warm, charming pet documentary narrator.
-Topic: "{topic_genre}".
-Language: {lang}.
-Task: Write {needed} consecutive, adorable story sentences about these animals.
-Each sentence must be short, under 11 words (~3 seconds read).
-Return ONLY a JSON object:
-{{"story": ["Sentence 1...", "Sentence 2..."]}}"""
-
-                resp = client.chat.completions.create(
-                    model=LLM_MODEL,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.5,
-                    response_format={"type": "json_object"}
-                )
-                try:
-                    res_data = json.loads(resp.choices[0].message.content.strip())
-                    batch = res_data.get("story", [])
-                except Exception:
-                    batch = []
-
-                if not batch:
-                    batch = [f"Khoảnh khắc đáng yêu ngập tràn niềm vui ở phân cảnh thứ {len(parsed_lines) + i + 1}." for i in range(needed)]
-
-                for line in batch:
-                    parsed_lines.append(str(line).strip())
-                    if len(parsed_lines) >= calc_clips:
-                        break
-
+            # ============================
+            # 2. TẢI B-ROLL (giữ raw, chưa cắt)
+            # ============================
+            status.update(label="🎬 2/6: Tải B-roll động vật dễ thương & lọc trùng...")
             scenes = []
-            for idx in range(calc_clips):
-                q = dynamic_queries[idx % len(dynamic_queries)]
+            for idx, q in enumerate(queries):
+                v_url = get_broll_clip(q, pexels_key, pixabay_key, used_ids)
+                if not v_url:
+                    v_url = get_broll_clip(
+                        {"query": "cute pet kitten puppy", "fallback": "cute animal"},
+                        pexels_key, pixabay_key, used_ids
+                    )
+                raw_v = os.path.join(workdir, f"raw_{idx:03d}.mp4")
+                ok = v_url and download_file_safe(v_url, raw_v)
+
+                # Chống trùng khung hình
+                if ok:
+                    ch = video_content_hash(raw_v)
+                    if ch in used_content:
+                        os.remove(raw_v)
+                        v_url2 = get_broll_clip(
+                            {"query": "playful cute animals", "fallback": "cute pets"},
+                            pexels_key, pixabay_key, used_ids
+                        )
+                        if v_url2 and download_file_safe(v_url2, raw_v):
+                            ch = video_content_hash(raw_v)
+                    used_content.add(ch)
+
+                if not ok or not os.path.exists(raw_v):
+                    # Fallback: clip pastel
+                    color_v = os.path.join(workdir, f"raw_{idx:03d}.mp4")
+                    subprocess.run([
+                        FFMPEG_EXE, "-y", "-f", "lavfi",
+                        "-i", f"color=c=0xFFD1DC:s={'1080x1920' if is_port else '1280x720'}:d=5:r=30",
+                        "-pix_fmt", "yuv420p", "-video_track_timescale", str(TIMESCALE),
+                        color_v
+                    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+                    raw_v = color_v
+
                 scenes.append({
-                    "speech_text": parsed_lines[idx],
                     "query": q["query"],
                     "fallback": q["fallback"],
-                    "sfx_query": q["sfx"]
+                    "sfx_query_hint": q["sfx"],
+                    "raw": raw_v,
+                    "raw_dur": get_media_duration(raw_v, default=5.0),
                 })
 
-            # 2. Sinh giọng đọc Edge-TTS
-            status.update(label="🎙️ 2/5: Tạo giọng đọc thuyết minh ấm áp...")
+            # ============================
+            # 3. AI VIẾT NARRATION KHỚP CLIP THỰC TẾ
+            # ============================
+            status.update(label="📝 3/6: AI đọc query thực tế → viết narration khớp từng clip...")
+            narrations = ai_write_narration_for_clips(
+                client, LLM_MODEL, topic_genre.strip(),
+                [{"query": s["query"], "fallback": s["fallback"]} for s in scenes],
+                lang
+            )
+
+            for sc, narr in zip(scenes, narrations):
+                sc["speech"] = narr["speech"]
+                sc["sfx_query"] = narr["sfx"] or sc["sfx_query_hint"]
+
+            # ============================
+            # 4. SINH VOICE + ĐO DURATION
+            # ============================
+            status.update(label="🎙️ 4/6: Sinh voice & đo duration để cắt clip khớp chính xác...")
             for idx, sc in enumerate(scenes):
                 v_file = os.path.join(workdir, f"v_{idx:03d}.mp3")
-                asyncio.run(generate_voice(sc["speech_text"], v_file, voice_choice))
+                generate_voice(sc["speech"], v_file, voice_choice)
+                v_dur = get_media_duration(v_file, default=3.0)
+                scene_dur = min(v_dur + VOICE_PAD, MAX_SCENE_DUR)
+                scene_dur = max(scene_dur, MIN_SCENE_DUR)
                 sc["voice"] = v_file
+                sc["voice_dur"] = v_dur
+                sc["duration"] = round(scene_dur, 3)
 
-            # 3. Tải Footage & Bù đắp SFX tiếng kêu
-            status.update(label="🎬 3/5: Tải hình ảnh động vật dễ thương & lọc trùng...")
+            total_video_sec = sum(sc["duration"] for sc in scenes)
+            status.update(label=f"🎙️ 4/6: Xong {len(scenes)} voice, tổng video {total_video_sec:.1f}s")
+
+            # ============================
+            # 5. CẮT CLIP THEO DURATION ĐỘNG + TẢI SFX
+            # ============================
+            status.update(label="✂️ 5/6: Cắt clip khớp duration voice + tải tiếng kêu...")
             for idx, sc in enumerate(scenes):
-                v_url = get_broll_clip(sc, pexels_key, pixabay_key, used_ids)
-                if not v_url:
-                    fallback_q = {"query": "cute pet kitten puppy", "fallback": "cute animal"}
-                    v_url = get_broll_clip(fallback_q, pexels_key, pixabay_key, used_ids)
-
-                raw_v = os.path.join(workdir, f"raw_{idx:03d}.mp4")
                 cut_v = os.path.join(workdir, f"cut_{idx:03d}.mp4")
-
-                download_file_safe(v_url, raw_v)
-
-                # Chống trùng lặp khung hình
-                ch = video_content_hash(raw_v)
-                if ch in used_content:
-                    os.remove(raw_v)
-                    v_url2 = get_broll_clip({"query": "playful cute animals", "fallback": "cute pets"}, pexels_key, pixabay_key, used_ids)
-                    if v_url2:
-                        download_file_safe(v_url2, raw_v)
-                        ch = video_content_hash(raw_v)
-                used_content.add(ch)
-
-                has_orig = cut_clip_exact_5s(raw_v, cut_v, is_port, keep_original_audio)
+                has_orig = cut_clip_to_duration(
+                    sc["raw"], cut_v, sc["duration"], is_port, keep_original_audio
+                )
                 sc["clip"] = cut_v
                 sc["has_orig"] = has_orig
-                if os.path.exists(raw_v):
-                    os.remove(raw_v)
+                try:
+                    if sc["raw"] != cut_v and os.path.exists(sc["raw"]):
+                        os.remove(sc["raw"])
+                except Exception:
+                    pass
 
-                # Tải hiệu ứng tiếng kêu từ Freesound
                 sfx_path = os.path.join(workdir, f"sfx_{idx:03d}.mp3")
                 if freesound_key:
                     fetch_animal_sfx(sc["sfx_query"], freesound_key, sfx_path)
                 sc["sfx"] = sfx_path if os.path.exists(sfx_path) else None
 
-            # 4. Trộn Audio 3 lớp & Đóng gói từng cảnh 5s
-            status.update(label="🎚️ 4/5: Hòa âm tiếng kêu + Voice + khử lệch timebase...")
+            # ============================
+            # 6. MIX AUDIO + MUX + CONCAT + BGM MASTER
+            # ============================
+            status.update(label="🎚️ 6/6: Hòa âm & nối master...")
             clips_txt = os.path.join(workdir, "clips.txt")
             with open(clips_txt, "w", encoding="utf-8") as f_cl:
                 for idx, sc in enumerate(scenes):
@@ -518,23 +667,24 @@ Return ONLY a JSON object:
                         sc["voice"],
                         sc["clip"] if sc["has_orig"] else None,
                         sc["sfx"],
-                        scene_audio
+                        scene_audio,
+                        sc["duration"]
                     )
                     synced_v = os.path.join(workdir, f"s_{idx:03d}.mp4")
-                    # Thêm cờ chống lệch Timebase PTS khi nối file
                     subprocess.run([
                         FFMPEG_EXE, "-y",
                         "-i", sc["clip"], "-i", scene_audio,
-                        "-t", f"{CLIP_DURATION:.3f}",
+                        "-t", f"{sc['duration']:.3f}",
                         "-map", "0:v:0", "-map", "1:a:0",
-                        "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
-                        "-avoid_negative_ts", "make_zero", "-fflags", "+genpts",
+                        "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
+                        "-video_track_timescale", str(TIMESCALE),
+                        "-avoid_negative_ts", "make_zero",
+                        "-fflags", "+genpts",
+                        "-vsync", "cfr",
                         synced_v
                     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
                     f_cl.write(f"file '{os.path.abspath(synced_v)}'\n")
 
-            # 5. Nối chuỗi & Master Nhạc Nền EBU R128
-            status.update(label="⚡ 5/5: Nối Master và cân bằng chuẩn âm thanh EBU R128...", state="running")
             temp_merged = os.path.join(workdir, "temp_merged.mp4")
             final_mp4 = os.path.join(workdir, "cute_animals_master.mp4")
 
@@ -544,7 +694,7 @@ Return ONLY a JSON object:
             ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
             bgm_raw = os.path.join(workdir, "bgm.mp3")
-            has_bgm = (bgm_volume > 0) and download_file_safe(CUTE_BGM_URL, bgm_raw)
+            has_bgm = (bgm_volume > 0) and download_file_safe(CUTE_BGM_URL, bgm_raw, min_size=50000)
 
             if has_bgm:
                 bgm_gain = bgm_volume / 100.0
@@ -558,6 +708,7 @@ Return ONLY a JSON object:
                     f"loudnorm=I=-14:TP=-1.5:LRA=11[aout]",
                     "-map", "0:v:0", "-map", "[aout]",
                     "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+                    "-movflags", "+faststart",
                     "-shortest", final_mp4
                 ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
             else:
@@ -565,19 +716,21 @@ Return ONLY a JSON object:
                     FFMPEG_EXE, "-y", "-i", temp_merged,
                     "-af", "loudnorm=I=-14:TP=-1.5:LRA=11",
                     "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+                    "-movflags", "+faststart",
                     final_mp4
                 ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
-            status.update(label=f"🎉 Hoàn thành video động vật dễ thương {calc_clips * 5}s!", state="complete")
+            out_dur = get_media_duration(final_mp4, default=0)
+            status.update(label=f"🎉 Hoàn thành! Tổng {out_dur:.1f}s — voice viết theo hình thực tế.", state="complete")
 
             with open(final_mp4, "rb") as f:
                 v_bytes = f.read()
 
             st.video(v_bytes)
             st.download_button(
-                label=f"⬇️ Tải Video Hoàn Chỉnh ({calc_clips * 5} Giây)",
+                label=f"⬇️ Tải Video Hoàn Chỉnh ({out_dur:.1f}s)",
                 data=v_bytes,
-                file_name=f"cute_animals_{calc_clips * 5}s_{int(time.time())}.mp4",
+                file_name=f"cute_animals_{int(out_dur)}s_{int(time.time())}.mp4",
                 mime="video/mp4",
                 use_container_width=True
             )
